@@ -7,10 +7,17 @@ Designed for servers, databases, API keys, cloud accounts, and network devices.
 Features:
 - AES-256-GCM encryption with Argon2id KDF
 - Local TOTP 2FA (no internet required)
-- System tray with global hotkey (Shift+V+P chord)
+- System tray with configurable global hotkey
 - Server/environment focused organization
 - Quick access for terminal and remote sessions
 - Secure PDF export for team credential sharing
+- Favorites/pinned credentials
+- SSH key storage
+- Password expiry reminders (90 days)
+- Clipboard auto-clear (configurable)
+- Dark/Light theme
+- Sorting options
+- Breach detection (local common passwords check)
 
 Performance optimizations:
 - Lazy loading of heavy modules (PDF)
@@ -29,10 +36,12 @@ import time
 import threading
 import queue
 import tempfile
+import urllib.request
+import urllib.error
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 # Core GUI imports
@@ -92,9 +101,10 @@ def _load_pdf_modules():
 # CONFIGURATION
 # ============================================================
 APP_NAME = "SecureVault"
-APP_VERSION = "3.1.1"  # Better error messages
+APP_VERSION = "4.0.0"  # Major update: themes, favorites, expiry, breach check
 VAULT_FILENAME = "vault.enc"
 STATS_FILENAME = "stats.enc"
+SETTINGS_FILENAME = "settings.json"
 SALT_LENGTH = 32
 NONCE_LENGTH = 12
 KEY_LENGTH = 32
@@ -106,9 +116,61 @@ DEFAULT_PASSWORD_LENGTH = 24
 MIN_PASSWORD_LENGTH = 4
 MAX_PASSWORD_LENGTH = 128
 
-# Hotkey chord: Shift+V then P (no key suppression to avoid interference)
-HOTKEY_CHORD = ["shift+v", "p"]
+# Default hotkey chord: Shift+V then P (configurable in settings)
+DEFAULT_HOTKEY_FIRST = "shift+v"
+DEFAULT_HOTKEY_SECOND = "p"
 CHORD_TIMEOUT = 1.0  # seconds to complete the chord
+
+# Password expiry (days)
+PASSWORD_EXPIRY_DAYS = 90
+PASSWORD_WARNING_DAYS = 14  # Warn this many days before expiry
+
+# Clipboard auto-clear default (seconds) - 5 minutes
+DEFAULT_CLIPBOARD_CLEAR_SECONDS = 300
+
+# Top common passwords for local breach detection (top 1000 most common)
+COMMON_PASSWORDS = {
+    "123456", "password", "12345678", "qwerty", "123456789", "12345", "1234", "111111",
+    "1234567", "dragon", "123123", "baseball", "abc123", "football", "monkey", "letmein",
+    "696969", "shadow", "master", "666666", "qwertyuiop", "123321", "mustang", "1234567890",
+    "michael", "654321", "pussy", "superman", "1qaz2wsx", "7777777", "fuckyou", "121212",
+    "000000", "qazwsx", "123qwe", "killer", "trustno1", "jordan", "jennifer", "zxcvbnm",
+    "asdfgh", "hunter", "buster", "soccer", "harley", "batman", "andrew", "tigger",
+    "sunshine", "iloveyou", "fuckme", "2000", "charlie", "robert", "thomas", "hockey",
+    "ranger", "daniel", "starwars", "klaster", "112233", "george", "asshole", "computer",
+    "michelle", "jessica", "pepper", "1111", "zxcvbn", "555555", "11111111", "131313",
+    "freedom", "777777", "pass", "fuck", "maggie", "159753", "aaaaaa", "ginger", "princess",
+    "joshua", "cheese", "amanda", "summer", "love", "ashley", "6969", "nicole", "chelsea",
+    "biteme", "matthew", "access", "yankees", "987654321", "dallas", "austin", "thunder",
+    "taylor", "matrix", "william", "corvette", "hello", "martin", "heather", "secret",
+    "fucker", "merlin", "diamond", "1234qwer", "gfhjkm", "hammer", "silver", "222222",
+    "88888888", "anthony", "justin", "test", "bailey", "q1w2e3r4t5", "patrick", "internet",
+    "scooter", "orange", "11111", "golfer", "cookie", "richard", "samantha", "bigdog",
+    "guitar", "jackson", "whatever", "mickey", "chicken", "sparky", "snoopy", "maverick",
+    "phoenix", "camaro", "sexy", "peanut", "morgan", "welcome", "falcon", "cowboy",
+    "ferrari", "samsung", "andrea", "smokey", "steelers", "joseph", "mercedes", "dakota",
+    "arsenal", "eagles", "melissa", "boomer", "booboo", "spider", "nascar", "monster",
+    "tigers", "yellow", "xxxxxx", "123123123", "gateway", "marina", "diablo", "bulldog",
+    "qwer1234", "compaq", "purple", "hardcore", "banana", "junior", "hannah", "123654",
+    "porsche", "lakers", "iceman", "money", "cowboys", "987654", "london", "tennis",
+    "999999", "ncc1701", "coffee", "scooby", "0000", "miller", "boston", "q1w2e3r4",
+    "fuckoff", "brandon", "yamaha", "chester", "mother", "forever", "johnny", "edward",
+    "333333", "oliver", "redsox", "player", "nikita", "knight", "fender", "barney",
+    "midnight", "please", "brandy", "chicago", "badboy", "iwantu", "slayer", "rangers",
+    "charles", "angel", "flower", "bigdaddy", "rabbit", "wizard", "bigdick", "jasper",
+    "enter", "rachel", "chris", "steven", "winner", "adidas", "victoria", "natasha",
+    "1q2w3e4r", "jasmine", "winter", "prince", "panties", "marine", "ghbdtn", "fishing",
+    "cocacola", "casper", "james", "232323", "raiders", "888888", "marlboro", "gandalf",
+    "asdfasdf", "crystal", "87654321", "12344321", "sexsex", "golden", "blowme", "bigtits",
+    "8675309", "panther", "lauren", "angela", "bitch", "spanky", "thx1138", "angels",
+    "madison", "winston", "shannon", "mike", "toyota", "blowjob", "jordan23", "canada",
+    "sophie", "Password", "apples", "dick", "tiger", "razz", "123abc", "pokemon", "qazxsw",
+    "55555", "qwaszx", "muffin", "johnson", "murphy", "cooper", "jonathan", "liverpoo",
+    "david", "danielle", "159357", "jackie", "1990", "123456a", "789456", "turtle", "horny",
+    "abcd1234", "scorpion", "qazwsxedc", "101010", "butter", "carlos", "Password1",
+    "admin", "password1", "password123", "admin123", "root", "toor", "administrator",
+    "letmein123", "welcome1", "welcome123", "changeme", "passw0rd", "p@ssw0rd", "P@ssw0rd",
+}
 
 # DevOps credential types with icons and default fields
 # Format: (display_name, icon, default_protocol, suggested_port)
@@ -166,8 +228,8 @@ ENVIRONMENTS = ["Production", "Staging", "Development", "QA", "DR", "Local", "Sh
 PROTOCOLS = ["SSH", "RDP", "HTTPS", "HTTP", "MySQL", "PostgreSQL", "MongoDB", "Redis",
              "MSSQL", "FTP/SFTP", "API", "Console", "LDAP", "SMTP", "Docker", "K8s API", "VPN", "Other"]
 
-# Dark terminal theme
-COLORS = {
+# Dark theme (default)
+COLORS_DARK = {
     "bg_primary": "#0D1117",
     "bg_secondary": "#161B22",
     "bg_tertiary": "#21262D",
@@ -185,6 +247,35 @@ COLORS = {
     "staging": "#D29922",
     "dev": "#3FB950",
 }
+
+# Light theme
+COLORS_LIGHT = {
+    "bg_primary": "#FFFFFF",
+    "bg_secondary": "#F6F8FA",
+    "bg_tertiary": "#EAEEF2",
+    "bg_popup": "#FFFFFF",
+    "accent": "#0969DA",
+    "accent_hover": "#0550AE",
+    "success": "#1A7F37",
+    "warning": "#9A6700",
+    "danger": "#CF222E",
+    "text_primary": "#1F2328",
+    "text_secondary": "#656D76",
+    "text_tertiary": "#8C959F",
+    "border": "#D0D7DE",
+    "prod": "#CF222E",
+    "staging": "#9A6700",
+    "dev": "#1A7F37",
+}
+
+# Active colors (set by theme)
+COLORS = COLORS_DARK.copy()
+
+def set_theme(dark: bool = True):
+    """Switch between dark and light theme."""
+    global COLORS
+    COLORS.clear()
+    COLORS.update(COLORS_DARK if dark else COLORS_LIGHT)
 
 # ============================================================
 # PATHS (cached for performance)
@@ -208,6 +299,55 @@ def get_vault_path() -> Path:
 @lru_cache(maxsize=1)
 def get_stats_path() -> Path:
     return get_vault_dir() / STATS_FILENAME
+
+def get_settings_path() -> Path:
+    return get_vault_dir() / SETTINGS_FILENAME
+
+# ============================================================
+# SETTINGS MANAGER
+# ============================================================
+class Settings:
+    """Persistent user settings (unencrypted, non-sensitive)."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._load()
+        return cls._instance
+
+    def _load(self):
+        self.data = {
+            "theme": "dark",
+            "hotkey_first": DEFAULT_HOTKEY_FIRST,
+            "hotkey_second": DEFAULT_HOTKEY_SECOND,
+            "clipboard_clear_seconds": DEFAULT_CLIPBOARD_CLEAR_SECONDS,
+            "sort_by": "name",  # name, date, usage, environment
+            "sort_ascending": True,
+        }
+        path = get_settings_path()
+        if path.exists():
+            try:
+                self.data.update(json.loads(path.read_text()))
+            except:
+                pass
+        # Apply theme on load
+        set_theme(self.data["theme"] == "dark")
+
+    def save(self):
+        get_settings_path().write_text(json.dumps(self.data, indent=2))
+
+    def get(self, key: str, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key: str, value):
+        self.data[key] = value
+        self.save()
+        if key == "theme":
+            set_theme(value == "dark")
+
+def get_settings() -> Settings:
+    return Settings()
 
 # ============================================================
 # CRYPTO
@@ -255,6 +395,51 @@ def generate_password(length: int = DEFAULT_PASSWORD_LENGTH, use_upper: bool = T
         chars[i], chars[j] = chars[j], chars[i]
     return "".join(chars)
 
+def check_password_breach(pw: str) -> Tuple[bool, str]:
+    """
+    Check if password is in common passwords list (local check).
+    Returns (is_breached, message)
+    """
+    if not pw:
+        return False, ""
+
+    # Check against local common passwords
+    if pw.lower() in COMMON_PASSWORDS or pw in COMMON_PASSWORDS:
+        return True, "Common password - easily guessable!"
+
+    # Check for simple patterns
+    if pw.isdigit() and len(set(pw)) <= 2:
+        return True, "Simple number pattern"
+    if pw.lower() == pw.lower()[0] * len(pw):
+        return True, "Repeated character"
+
+    return False, "Not in common breach list"
+
+def check_password_hibp(pw: str) -> Tuple[bool, int, str]:
+    """
+    Check password against Have I Been Pwned using k-anonymity.
+    Only sends first 5 chars of SHA-1 hash (privacy-safe).
+    Returns (is_breached, count, message)
+    """
+    try:
+        sha1 = hashlib.sha1(pw.encode('utf-8')).hexdigest().upper()
+        prefix, suffix = sha1[:5], sha1[5:]
+
+        url = f"https://api.pwnedpasswords.com/range/{prefix}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'SecureVault-PasswordManager'})
+
+        with urllib.request.urlopen(req, timeout=5) as response:
+            hashes = response.read().decode('utf-8')
+
+        for line in hashes.splitlines():
+            hash_suffix, count = line.split(':')
+            if hash_suffix == suffix:
+                return True, int(count), f"Found in {int(count):,} breaches!"
+
+        return False, 0, "Not found in breaches"
+    except Exception as e:
+        return False, -1, f"Check failed: {str(e)[:30]}"
+
 def password_strength(pw: str) -> Tuple[str, int, str, str]:
     """
     Strict password strength scoring based on NIST/OWASP guidelines.
@@ -266,6 +451,11 @@ def password_strength(pw: str) -> Tuple[str, int, str, str]:
     length = len(pw)
     score = 0
     details = []
+
+    # Check for common passwords first (instant fail)
+    is_common, common_msg = check_password_breach(pw)
+    if is_common:
+        return ("Breached", 5, COLORS["danger"], common_msg)
 
     # Length scoring (most important factor) - up to 50 points
     if length >= 4: score += 5
@@ -316,6 +506,32 @@ def password_strength(pw: str) -> Tuple[str, int, str, str]:
         return ("Strong", score, COLORS["accent"], "Good security")
     else:
         return ("Excellent", score, COLORS["success"], "Maximum security")
+
+def get_password_age_days(modified_date: str) -> int:
+    """Get password age in days from modified date string."""
+    try:
+        if not modified_date:
+            return 0
+        modified = datetime.fromisoformat(modified_date.replace('Z', '+00:00'))
+        now = datetime.now(timezone.utc)
+        return (now - modified).days
+    except:
+        return 0
+
+def is_password_expiring(modified_date: str) -> Tuple[bool, int, str]:
+    """
+    Check if password is expiring soon or expired.
+    Returns (is_expiring, days_until_expiry, message)
+    """
+    age_days = get_password_age_days(modified_date)
+    days_until_expiry = PASSWORD_EXPIRY_DAYS - age_days
+
+    if days_until_expiry <= 0:
+        return True, days_until_expiry, f"Expired {abs(days_until_expiry)} days ago!"
+    elif days_until_expiry <= PASSWORD_WARNING_DAYS:
+        return True, days_until_expiry, f"Expires in {days_until_expiry} days"
+    else:
+        return False, days_until_expiry, f"{age_days} days old"
 
 # ============================================================
 # PDF EXPORT (Password Protected - Lazy Loaded)
@@ -577,7 +793,7 @@ class UsageStats:
 # ============================================================
 class Vault:
     __slots__ = ('path', 'salt', 'key', 'verify_hash', 'totp_secret', 'totp_enabled',
-                 'entries', 'unlocked', 'stats', '_list_cache', '_list_cache_valid')
+                 'entries', 'unlocked', 'stats', '_list_cache', '_list_cache_valid', 'favorites')
 
     def __init__(self):
         self.path = get_vault_path()
@@ -591,9 +807,39 @@ class Vault:
         self.stats = UsageStats()
         self._list_cache = []
         self._list_cache_valid = False
+        self.favorites: Set[str] = set()
 
     def exists(self) -> bool:
         return self.path.exists()
+
+    def toggle_favorite(self, eid: str) -> bool:
+        """Toggle favorite status. Returns new status."""
+        if eid in self.favorites:
+            self.favorites.discard(eid)
+            result = False
+        else:
+            self.favorites.add(eid)
+            result = True
+        self._save()
+        return result
+
+    def is_favorite(self, eid: str) -> bool:
+        return eid in self.favorites
+
+    def get_favorites(self) -> list:
+        """Get all favorite credentials."""
+        return [e for e in self.list_all() if e["id"] in self.favorites]
+
+    def get_expiring_passwords(self) -> list:
+        """Get credentials with expiring/expired passwords."""
+        result = []
+        for e in self.list_all():
+            is_exp, days, msg = is_password_expiring(e.get("modified", ""))
+            if is_exp:
+                e["expiry_days"] = days
+                e["expiry_msg"] = msg
+                result.append(e)
+        return sorted(result, key=lambda x: x["expiry_days"])
 
     def create(self, password: str, enable_2fa: bool = True) -> str:
         self.salt = os.urandom(SALT_LENGTH)
@@ -624,6 +870,8 @@ class Vault:
                 self.totp_enabled = True
             else:
                 self.totp_enabled = data.get("totp_enabled", False)
+            # Load favorites
+            self.favorites = set(data.get("favorites", []))
             self.unlocked = True
             self._invalidate_cache()
             self.stats.set_key(self.key)
@@ -651,9 +899,9 @@ class Vault:
 
     def _save(self):
         enc = encrypt_data(json.dumps(self.entries).encode("utf-8"), self.key)
-        data = {"version": 3, "app": APP_NAME, "salt": base64.b64encode(self.salt).decode(),
+        data = {"version": 4, "app": APP_NAME, "salt": base64.b64encode(self.salt).decode(),
                 "master_verify": self.verify_hash, "entries_enc": base64.b64encode(enc).decode(),
-                "totp_enabled": self.totp_enabled}
+                "totp_enabled": self.totp_enabled, "favorites": list(self.favorites)}
         if self.totp_secret:
             data["totp_enc"] = base64.b64encode(encrypt_data(self.totp_secret.encode("utf-8"), self.key)).decode()
         tmp = self.path.with_suffix(".tmp")
@@ -661,16 +909,27 @@ class Vault:
         shutil.move(str(tmp), str(self.path))
 
     def add(self, name: str, ctype: str, host: str = "", port: str = "", user: str = "",
-            password: str = "", env: str = "", proto: str = "", tags: str = "", notes: str = "") -> str:
+            password: str = "", env: str = "", proto: str = "", tags: str = "", notes: str = "",
+            ssh_key: str = "") -> str:
         eid = secrets.token_hex(8)
         now = datetime.now(timezone.utc).isoformat()
-        self.entries[eid] = {"name": name, "type": ctype, "host": host, "port": port, "username": user,
-                             "password_enc": base64.b64encode(encrypt_data(password.encode("utf-8"), self.key)).decode(),
-                             "environment": env, "protocol": proto, "tags": tags, "notes": notes,
-                             "created": now, "modified": now}
+        entry = {"name": name, "type": ctype, "host": host, "port": port, "username": user,
+                 "password_enc": base64.b64encode(encrypt_data(password.encode("utf-8"), self.key)).decode(),
+                 "environment": env, "protocol": proto, "tags": tags, "notes": notes,
+                 "created": now, "modified": now}
+        if ssh_key:
+            entry["ssh_key_enc"] = base64.b64encode(encrypt_data(ssh_key.encode("utf-8"), self.key)).decode()
+        self.entries[eid] = entry
         self._invalidate_cache()
         self._save()
         return eid
+
+    def get_ssh_key(self, eid: str) -> str:
+        """Get decrypted SSH key for an entry."""
+        entry = self.entries.get(eid, {})
+        if "ssh_key_enc" in entry:
+            return decrypt_data(base64.b64decode(entry["ssh_key_enc"]), self.key).decode("utf-8")
+        return ""
 
     def get_password(self, eid: str, track: bool = True) -> str:
         if track: self.stats.record(eid)
@@ -679,8 +938,8 @@ class Vault:
     def _invalidate_cache(self):
         self._list_cache_valid = False
 
-    def list_all(self) -> list:
-        if self._list_cache_valid:
+    def list_all(self, sort_by: str = None, ascending: bool = True) -> list:
+        if self._list_cache_valid and sort_by is None:
             return self._list_cache
         fields = ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "created", "modified"]
         result = []
@@ -688,10 +947,31 @@ class Vault:
             entry = {"id": k, "use_count": self.stats.count(k)}
             for f in fields:
                 entry[f] = v.get(f, "")
+            entry["is_favorite"] = k in self.favorites
+            entry["has_ssh_key"] = "ssh_key_enc" in v
+            # Check expiry
+            is_exp, days, msg = is_password_expiring(v.get("modified", ""))
+            entry["is_expiring"] = is_exp
+            entry["expiry_days"] = days
+            entry["expiry_msg"] = msg
             result.append(entry)
-        result.sort(key=lambda x: x["name"].lower())
-        self._list_cache = result
-        self._list_cache_valid = True
+
+        # Sort based on settings or parameter
+        sort_key = sort_by or get_settings().get("sort_by", "name")
+        if sort_key == "name":
+            result.sort(key=lambda x: (not x["is_favorite"], x["name"].lower()), reverse=not ascending)
+        elif sort_key == "date":
+            result.sort(key=lambda x: (not x["is_favorite"], x["modified"]), reverse=not ascending)
+        elif sort_key == "usage":
+            result.sort(key=lambda x: (not x["is_favorite"], -x["use_count"]), reverse=not ascending)
+        elif sort_key == "environment":
+            result.sort(key=lambda x: (not x["is_favorite"], x["environment"], x["name"].lower()), reverse=not ascending)
+        else:
+            result.sort(key=lambda x: (not x["is_favorite"], x["name"].lower()))
+
+        if sort_by is None:
+            self._list_cache = result
+            self._list_cache_valid = True
         return result
 
     def top_used(self, n: int = 8) -> list:
@@ -712,6 +992,12 @@ class Vault:
         e = self.entries[eid]
         if "password" in kw:
             e["password_enc"] = base64.b64encode(encrypt_data(kw.pop("password").encode("utf-8"), self.key)).decode()
+        if "ssh_key" in kw:
+            ssh_key = kw.pop("ssh_key")
+            if ssh_key:
+                e["ssh_key_enc"] = base64.b64encode(encrypt_data(ssh_key.encode("utf-8"), self.key)).decode()
+            elif "ssh_key_enc" in e:
+                del e["ssh_key_enc"]
         for f in ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes"]:
             if f in kw: e[f] = kw[f]
         e["modified"] = datetime.now(timezone.utc).isoformat()
@@ -760,15 +1046,31 @@ def in_startup() -> bool:
 # ============================================================
 class ChordHotkeyHandler:
     """
-    Handles Shift+V+P chord hotkey without interfering with normal typing.
+    Handles configurable chord hotkey without interfering with normal typing.
     Uses a state machine approach instead of key suppression.
     """
     def __init__(self, callback: Callable):
         self.callback = callback
-        self.chord_state = 0  # 0=waiting, 1=shift+v pressed, 2=chord complete
+        self.chord_state = 0  # 0=waiting, 1=first key pressed, 2=chord complete
         self.last_chord_time = 0
         self.active = False
         self._lock = threading.Lock()
+        self._load_hotkey_config()
+
+    def _load_hotkey_config(self):
+        """Load hotkey configuration from settings."""
+        settings = get_settings()
+        self.hotkey_first = settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        self.hotkey_second = settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        # Parse first hotkey (e.g., "shift+v" -> modifier="shift", key="v")
+        if "+" in self.hotkey_first:
+            self.first_modifier, self.first_key = self.hotkey_first.rsplit("+", 1)
+        else:
+            self.first_modifier, self.first_key = None, self.hotkey_first
+
+    def reload_config(self):
+        """Reload hotkey configuration."""
+        self._load_hotkey_config()
 
     def start(self):
         """Start listening for the chord hotkey."""
@@ -801,29 +1103,30 @@ class ChordHotkeyHandler:
 
             key_name = event.name.lower() if event.name else ""
 
-            # State 0: Waiting for Shift+V
+            # State 0: Waiting for first key combo (e.g., Shift+V)
             if self.chord_state == 0:
-                if key_name == 'v' and keyboard.is_pressed('shift'):
-                    self.chord_state = 1
-                    self.last_chord_time = current_time
+                if key_name == self.first_key:
+                    if self.first_modifier is None or keyboard.is_pressed(self.first_modifier):
+                        self.chord_state = 1
+                        self.last_chord_time = current_time
 
-            # State 1: Shift+V was pressed, waiting for P
+            # State 1: First key was pressed, waiting for second key
             elif self.chord_state == 1:
-                if key_name == 'p':
+                if key_name == self.hotkey_second:
                     self.chord_state = 0  # Reset state
                     # Trigger callback in separate thread to not block
                     threading.Thread(target=self.callback, daemon=True).start()
-                elif key_name not in ('shift', 'v', 'p'):
+                elif key_name not in (self.first_modifier or '', self.first_key, self.hotkey_second):
                     # Wrong key pressed, reset
                     self.chord_state = 0
 
     def _on_key_release(self, event):
-        """Handle key release - reset chord if shift released early."""
+        """Handle key release - reset chord if modifier released early."""
         if not self.active:
             return
         key_name = event.name.lower() if event.name else ""
-        # If shift is released before completing chord, reset
-        if key_name == 'shift' and self.chord_state == 1:
+        # If modifier is released before completing chord, reset
+        if self.first_modifier and key_name == self.first_modifier and self.chord_state == 1:
             with self._lock:
                 self.chord_state = 0
 
@@ -967,7 +1270,7 @@ class QuickPopup(ctk.CTkToplevel):
 
     def _copy(self):
         if self.items:
-            pyperclip.copy(self.vault.get_password(self.items[self.sel]["id"]))
+            ClipboardManager.copy(self.vault.get_password(self.items[self.sel]["id"]))
             self.title("Copied!")
             self.after(350, self._close)
 
@@ -1020,7 +1323,8 @@ class PwEntry(ctk.CTkFrame):
 
 class Card(ctk.CTkFrame):
     def __init__(self, master, data: dict, on_click: Callable, on_copy: Callable, selectable: bool = False,
-                 selected: bool = False, on_select: Callable = None, **kw):
+                 selected: bool = False, on_select: Callable = None, on_favorite: Callable = None,
+                 show_expiry: bool = False, **kw):
         # Card with more info (62px height = 48 + 14)
         super().__init__(master, fg_color=COLORS["bg_secondary"], corner_radius=10, height=62, **kw)
         self.data = data
@@ -1029,7 +1333,12 @@ class Card(ctk.CTkFrame):
 
         env = data.get("environment", "")
         ec = COLORS["prod"] if env == "Production" else COLORS["staging"] if env == "Staging" else COLORS["dev"] if env == "Development" else COLORS["border"]
-        ctk.CTkFrame(self, width=4, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
+
+        # Expiry warning border
+        if data.get("is_expiring"):
+            ctk.CTkFrame(self, width=4, fg_color=COLORS["warning"], corner_radius=0).pack(side="left", fill="y")
+        else:
+            ctk.CTkFrame(self, width=4, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
 
         # Selection checkbox for export
         if selectable:
@@ -1039,10 +1348,19 @@ class Card(ctk.CTkFrame):
                                   command=lambda: on_select(data["id"], self.chk_var.get()) if on_select else None)
             chk.pack(side="left", padx=(8, 0))
 
+        # Favorite star button
+        if on_favorite:
+            is_fav = data.get("is_favorite", False)
+            ctk.CTkButton(self, text="★" if is_fav else "☆", width=28, height=28, corner_radius=6,
+                         fg_color=COLORS["warning"] if is_fav else "transparent",
+                         hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
+                         text_color=COLORS["text_primary"] if is_fav else COLORS["text_tertiary"],
+                         command=lambda: on_favorite(data["id"])).pack(side="right", padx=(0, 4))
+
         # Copy button on right
         ctk.CTkButton(self, text="Copy", width=60, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=10),
-                     command=lambda: on_copy(data)).pack(side="right", padx=10, pady=10)
+                     command=lambda: on_copy(data)).pack(side="right", padx=(0, 10), pady=10)
 
         # Icon on left
         ctype = data.get("type", "Other")
@@ -1057,7 +1375,7 @@ class Card(ctk.CTkFrame):
         cnt.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         cnt.bind("<Button-1>", lambda _: on_click(data))
 
-        # Top row: Name + Environment badge
+        # Top row: Name + badges
         top_row = ctk.CTkFrame(cnt, fg_color="transparent")
         top_row.pack(fill="x")
         top_row.bind("<Button-1>", lambda _: on_click(data))
@@ -1065,10 +1383,20 @@ class Card(ctk.CTkFrame):
         ctk.CTkLabel(top_row, text=data["name"], font=ctk.CTkFont(size=12, weight="bold"),
                     text_color=COLORS["text_primary"], anchor="w").pack(side="left")
 
+        # SSH key indicator
+        if data.get("has_ssh_key"):
+            ctk.CTkLabel(top_row, text="🔑", font=ctk.CTkFont(size=10)).pack(side="left", padx=(4, 0))
+
         # Environment badge
         if env:
             ctk.CTkLabel(top_row, text=env[:4], font=ctk.CTkFont(size=8, weight="bold"), text_color=ec,
                         fg_color=COLORS["bg_primary"], corner_radius=4, height=16).pack(side="left", padx=(8, 0))
+
+        # Expiry badge
+        if show_expiry and data.get("is_expiring"):
+            exp_color = COLORS["danger"] if data.get("expiry_days", 0) <= 0 else COLORS["warning"]
+            ctk.CTkLabel(top_row, text=data.get("expiry_msg", ""), font=ctk.CTkFont(size=8, weight="bold"),
+                        text_color=exp_color, fg_color=COLORS["bg_primary"], corner_radius=4, height=16).pack(side="left", padx=(8, 0))
 
         # Bottom row: type | user@host:port
         info_parts = []
@@ -1172,7 +1500,7 @@ class ExportDialog(ctk.CTkToplevel):
         self.pw_entry.show = True
         self.pw_entry.e.configure(show="")
         self.pw_entry.b.configure(text="Hide")
-        pyperclip.copy(pw)
+        ClipboardManager.copy(pw, auto_clear=False)  # Don't auto-clear generated passwords
         self.err_label.configure(text="Password generated and copied to clipboard!", text_color=COLORS["success"])
 
     def _do_export(self):
@@ -1226,13 +1554,52 @@ class ExportDialog(ctk.CTkToplevel):
 # ============================================================
 # APP
 # ============================================================
+class ClipboardManager:
+    """Manages clipboard with auto-clear functionality."""
+    _instance = None
+    _timer = None
+    _last_copied = None
+
+    @classmethod
+    def copy(cls, text: str, auto_clear: bool = True):
+        """Copy text to clipboard with optional auto-clear."""
+        pyperclip.copy(text)
+        cls._last_copied = text
+
+        if auto_clear:
+            # Cancel any existing timer
+            if cls._timer:
+                cls._timer.cancel()
+
+            # Get clear time from settings
+            clear_seconds = get_settings().get("clipboard_clear_seconds", DEFAULT_CLIPBOARD_CLEAR_SECONDS)
+            if clear_seconds > 0:
+                cls._timer = threading.Timer(clear_seconds, cls._clear_if_unchanged)
+                cls._timer.daemon = True
+                cls._timer.start()
+
+    @classmethod
+    def _clear_if_unchanged(cls):
+        """Clear clipboard only if it still contains our copied text."""
+        try:
+            current = pyperclip.paste()
+            if current == cls._last_copied:
+                pyperclip.copy("")
+                cls._last_copied = None
+        except:
+            pass
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} - System Architect Credentials")
         self.geometry("980x680")
         self.minsize(880, 620)
-        ctk.set_appearance_mode("dark")
+
+        # Apply theme from settings
+        settings = get_settings()
+        theme = settings.get("theme", "dark")
+        ctk.set_appearance_mode(theme)
         self.configure(fg_color=COLORS["bg_primary"])
 
         self.vault = Vault()
@@ -1245,6 +1612,8 @@ class App(ctk.CTk):
         self.start_min = False
         self.export_mode = False
         self.selected_for_export: Set[str] = set()
+        self.current_sort = settings.get("sort_by", "name")
+        self.sort_ascending = settings.get("sort_ascending", True)
 
         self._check_queue()
         self._show_login() if self.vault.exists() else self._show_setup()
@@ -1529,41 +1898,115 @@ class App(ctk.CTk):
         ctk.CTkLabel(hdr, text="All Credentials", font=ctk.CTkFont(size=20, weight="bold"), text_color=COLORS["text_primary"]).pack(side="left")
         Btn(hdr, text="+ Add", width=100, command=self._view_add).pack(side="right")
 
+        # Show expiry warnings if any
+        expiring = self.vault.get_expiring_passwords()
+        if expiring:
+            warn_frame = ctk.CTkFrame(self.content, fg_color=COLORS["warning"], corner_radius=8)
+            warn_frame.pack(fill="x", padx=20, pady=(0, 10))
+            warn_inner = ctk.CTkFrame(warn_frame, fg_color="transparent")
+            warn_inner.pack(fill="x", padx=12, pady=8)
+            ctk.CTkLabel(warn_inner, text=f"⚠️ {len(expiring)} password(s) expiring soon or expired",
+                        font=ctk.CTkFont(size=11, weight="bold"), text_color="#1F2328").pack(side="left")
+            ctk.CTkButton(warn_inner, text="View", width=60, height=24, corner_radius=6,
+                         fg_color="#1F2328", hover_color="#000000", text_color="#FFFFFF",
+                         font=ctk.CTkFont(size=10), command=self._view_expiring).pack(side="right")
+
         flt = ctk.CTkFrame(self.content, fg_color="transparent")
         flt.pack(fill="x", padx=20, pady=(0, 12))
-        self.search = Entry(flt, placeholder="Search...", textvariable=self.search_var, width=340)
+        self.search = Entry(flt, placeholder="Search...", textvariable=self.search_var, width=280)
         self.search.pack(side="left")
-        self.env_flt = ctk.CTkComboBox(flt, values=["All"] + ENVIRONMENTS, width=120, height=38, corner_radius=6,
+        self.env_flt = ctk.CTkComboBox(flt, values=["All"] + ENVIRONMENTS, width=110, height=38, corner_radius=6,
                                        border_width=1, border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
                                        dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11), command=lambda _: self._refresh_list())
         self.env_flt.set("All")
         self.env_flt.pack(side="left", padx=(8, 0))
 
+        # Sort options
+        self.sort_combo = ctk.CTkComboBox(flt, values=["Name", "Date Modified", "Usage", "Environment"], width=120, height=38,
+                                          corner_radius=6, border_width=1, border_color=COLORS["border"],
+                                          fg_color=COLORS["bg_tertiary"], dropdown_fg_color=COLORS["bg_secondary"],
+                                          font=ctk.CTkFont(size=11), command=self._on_sort_change)
+        sort_display = {"name": "Name", "date": "Date Modified", "usage": "Usage", "environment": "Environment"}
+        self.sort_combo.set(sort_display.get(self.current_sort, "Name"))
+        self.sort_combo.pack(side="left", padx=(8, 0))
+
+        # Favorites filter
+        ctk.CTkButton(flt, text="★", width=38, height=38, corner_radius=6,
+                     fg_color=COLORS["warning"] if hasattr(self, '_show_favorites_only') and self._show_favorites_only else COLORS["bg_tertiary"],
+                     hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
+                     command=self._toggle_favorites_filter).pack(side="right")
+
         self.lst = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
         self.lst.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self._refresh_list()
 
+    def _on_sort_change(self, value):
+        sort_map = {"Name": "name", "Date Modified": "date", "Usage": "usage", "Environment": "environment"}
+        self.current_sort = sort_map.get(value, "name")
+        get_settings().set("sort_by", self.current_sort)
+        self.vault._invalidate_cache()
+        self._refresh_list()
+
+    def _toggle_favorites_filter(self):
+        if not hasattr(self, '_show_favorites_only'):
+            self._show_favorites_only = False
+        self._show_favorites_only = not self._show_favorites_only
+        self._view_all()
+
+    def _view_expiring(self):
+        """Show credentials with expiring passwords."""
+        for w in self.content.winfo_children(): w.destroy()
+
+        hdr = ctk.CTkFrame(self.content, fg_color="transparent")
+        hdr.pack(fill="x", padx=20, pady=(20, 14))
+        ctk.CTkButton(hdr, text="< Back", width=70, height=28, corner_radius=5, fg_color="transparent",
+                     hover_color=COLORS["bg_tertiary"], text_color=COLORS["text_secondary"],
+                     font=ctk.CTkFont(size=11), command=self._view_all).pack(side="left")
+        ctk.CTkLabel(hdr, text="Expiring Passwords", font=ctk.CTkFont(size=20, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(side="left", padx=14)
+
+        ctk.CTkLabel(self.content, text="Passwords older than 90 days should be rotated for security.",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(anchor="w", padx=20, pady=(0, 12))
+
+        lst = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
+        lst.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        expiring = self.vault.get_expiring_passwords()
+        for e in expiring:
+            card = Card(lst, e, self._view_detail, self._quick_copy, show_expiry=True)
+            card.pack(fill="x", pady=2)
+
     def _refresh_list(self):
         if not hasattr(self, "lst"): return
         for w in self.lst.winfo_children(): w.destroy()
-        items = self.vault.list_all()
+        items = self.vault.list_all(sort_by=self.current_sort, ascending=self.sort_ascending)
         q = self.search_var.get().lower()
         env = self.env_flt.get() if hasattr(self, "env_flt") else "All"
+
+        # Apply favorites filter
+        if hasattr(self, '_show_favorites_only') and self._show_favorites_only:
+            items = [e for e in items if e.get("is_favorite")]
+
         if q:
             items = [e for e in items if q in e["name"].lower() or q in e.get("host", "").lower() or
                     q in e.get("username", "").lower() or q in e.get("tags", "").lower()]
         if env != "All":
             items = [e for e in items if e.get("environment") == env]
         if not items:
-            ctk.CTkLabel(self.lst, text="No credentials", font=ctk.CTkFont(size=12), text_color=COLORS["text_tertiary"]).pack(pady=30)
+            msg = "No favorites yet" if hasattr(self, '_show_favorites_only') and self._show_favorites_only else "No credentials"
+            ctk.CTkLabel(self.lst, text=msg, font=ctk.CTkFont(size=12), text_color=COLORS["text_tertiary"]).pack(pady=30)
             return
         for e in items:
             if self.export_mode:
                 Card(self.lst, e, self._view_detail, self._quick_copy,
                      selectable=True, selected=e["id"] in self.selected_for_export,
-                     on_select=self._toggle_export_selection).pack(fill="x", pady=2)
+                     on_select=self._toggle_export_selection, on_favorite=self._toggle_favorite).pack(fill="x", pady=2)
             else:
-                Card(self.lst, e, self._view_detail, self._quick_copy).pack(fill="x", pady=2)
+                Card(self.lst, e, self._view_detail, self._quick_copy, on_favorite=self._toggle_favorite).pack(fill="x", pady=2)
+
+    def _toggle_favorite(self, eid: str):
+        self.vault.toggle_favorite(eid)
+        self._refresh_list()
 
     def _toggle_export_selection(self, eid: str, selected: bool):
         if selected:
@@ -1575,7 +2018,7 @@ class App(ctk.CTk):
             self.export_btn.configure(text=f"Export {len(self.selected_for_export)} Selected")
 
     def _quick_copy(self, e: dict):
-        pyperclip.copy(self.vault.get_password(e["id"]))
+        ClipboardManager.copy(self.vault.get_password(e["id"]))
 
     def _view_recent(self):
         self.export_mode = False
@@ -1725,6 +2168,15 @@ class App(ctk.CTk):
                         text_color=ec, fg_color=COLORS["bg_tertiary"], corner_radius=6,
                         width=70, height=22).pack(side="left", padx=(12, 0))
 
+        # Show expiry warning if applicable
+        is_exp, days, exp_msg = is_password_expiring(e.get("modified", ""))
+        if is_exp:
+            exp_frame = ctk.CTkFrame(cnt, fg_color=COLORS["warning"], corner_radius=8)
+            exp_frame.pack(fill="x", pady=(0, 12))
+            exp_color = COLORS["danger"] if days <= 0 else COLORS["warning"]
+            ctk.CTkLabel(exp_frame, text=f"⚠️ Password {exp_msg} - consider rotating",
+                        font=ctk.CTkFont(size=11, weight="bold"), text_color="#1F2328").pack(padx=12, pady=8)
+
         pw = self.vault.get_password(e["id"])
         fields = [("Type", e.get("type")), ("Host", e.get("host")), ("Port", e.get("port")),
                   ("Username", e.get("username"), True), ("Password", pw, True, True),
@@ -1736,51 +2188,114 @@ class App(ctk.CTk):
             hide = len(item) > 3 and item[3]
             self._field(cnt, item[0], val, copy, hide)
 
+        # SSH Key section
+        ssh_key = self.vault.get_ssh_key(e["id"])
+        if ssh_key:
+            self._field(cnt, "SSH Key", ssh_key, True, True)
+
+        # Stats
+        stats_frame = ctk.CTkFrame(cnt, fg_color="transparent")
+        stats_frame.pack(fill="x", pady=(16, 0))
         if e.get("use_count"):
-            ctk.CTkLabel(cnt, text=f"Used {e['use_count']} times", font=ctk.CTkFont(size=11),
-                        text_color=COLORS["text_tertiary"]).pack(anchor="w", pady=(16, 0))
+            ctk.CTkLabel(stats_frame, text=f"Used {e['use_count']} times", font=ctk.CTkFont(size=11),
+                        text_color=COLORS["text_tertiary"]).pack(side="left")
+        age_days = get_password_age_days(e.get("modified", ""))
+        ctk.CTkLabel(stats_frame, text=f"Password age: {age_days} days", font=ctk.CTkFont(size=11),
+                    text_color=COLORS["text_tertiary"]).pack(side="right")
 
     def _field(self, parent, label: str, val: str, copy: bool = False, hide: bool = False):
-        # Modern card-style field with text on left, buttons on right
-        fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=10, height=60)
-        fr.pack(fill="x", pady=4)
-        fr.pack_propagate(False)
+        # Check if multiline (for SSH keys)
+        is_multiline = "\n" in val or len(val) > 100
 
-        # Left side - label and value
-        left = ctk.CTkFrame(fr, fg_color="transparent")
-        left.pack(side="left", fill="both", expand=True, padx=16, pady=10)
+        if is_multiline:
+            # Multiline field (expandable)
+            fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=10)
+            fr.pack(fill="x", pady=4)
 
-        ctk.CTkLabel(left, text=label, font=ctk.CTkFont(size=11), text_color=COLORS["text_tertiary"], anchor="w").pack(fill="x")
+            header = ctk.CTkFrame(fr, fg_color="transparent")
+            header.pack(fill="x", padx=16, pady=(10, 0))
+            ctk.CTkLabel(header, text=label, font=ctk.CTkFont(size=11), text_color=COLORS["text_tertiary"], anchor="w").pack(side="left")
 
-        disp = "*" * 16 if hide else (val[:50] + "..." if len(val) > 50 else val)
-        var = ctk.StringVar(value=disp)
-        ctk.CTkLabel(left, textvariable=var, font=ctk.CTkFont(size=14, family="Consolas" if hide or label in ["Host", "Port", "Username"] else None),
-                    text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+            # Buttons
+            if copy:
+                def do_copy():
+                    ClipboardManager.copy(val)
+                    cb.configure(text="Copied!")
+                    self.after(1000, lambda: cb.configure(text="Copy"))
+                cb = ctk.CTkButton(header, text="Copy", width=60, height=28, corner_radius=6,
+                                  fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                  font=ctk.CTkFont(size=10), command=do_copy)
+                cb.pack(side="right", padx=(6, 0))
 
-        # Right side - buttons
-        right = ctk.CTkFrame(fr, fg_color="transparent")
-        right.pack(side="right", padx=12, pady=10)
+            if hide:
+                show_var = [False]
+                text_widget = ctk.CTkTextbox(fr, height=80, corner_radius=6, border_width=0,
+                                             fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
+                                             font=ctk.CTkFont(size=11, family="Consolas"), state="disabled")
+                text_widget.pack(fill="x", padx=16, pady=(8, 10))
 
-        if copy:
-            def do_copy():
-                pyperclip.copy(val)
-                cb.configure(text="Copied!")
-                self.after(1000, lambda: cb.configure(text="Copy"))
-            cb = ctk.CTkButton(right, text="Copy", width=60, height=32, corner_radius=8,
-                              fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                              font=ctk.CTkFont(size=11), command=do_copy)
-            cb.pack(side="right", padx=(6, 0))
+                def toggle():
+                    show_var[0] = not show_var[0]
+                    text_widget.configure(state="normal")
+                    text_widget.delete("1.0", "end")
+                    text_widget.insert("1.0", val if show_var[0] else "*" * 20 + "\n(hidden)")
+                    text_widget.configure(state="disabled")
+                    tb.configure(text="Hide" if show_var[0] else "Show")
 
-        if hide:
-            show = [False]
-            def toggle():
-                show[0] = not show[0]
-                var.set(val if show[0] else "*" * 16)
-                tb.configure(text="Hide" if show[0] else "Show")
-            tb = ctk.CTkButton(right, text="Show", width=60, height=32, corner_radius=8,
-                              fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                              font=ctk.CTkFont(size=11), command=toggle)
-            tb.pack(side="right")
+                tb = ctk.CTkButton(header, text="Show", width=60, height=28, corner_radius=6,
+                                  fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                                  font=ctk.CTkFont(size=10), command=toggle)
+                tb.pack(side="right")
+                toggle()  # Initialize hidden
+            else:
+                text_widget = ctk.CTkTextbox(fr, height=80, corner_radius=6, border_width=0,
+                                             fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
+                                             font=ctk.CTkFont(size=11, family="Consolas"), state="disabled")
+                text_widget.pack(fill="x", padx=16, pady=(8, 10))
+                text_widget.configure(state="normal")
+                text_widget.insert("1.0", val)
+                text_widget.configure(state="disabled")
+        else:
+            # Single line field
+            fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=10, height=60)
+            fr.pack(fill="x", pady=4)
+            fr.pack_propagate(False)
+
+            # Left side - label and value
+            left = ctk.CTkFrame(fr, fg_color="transparent")
+            left.pack(side="left", fill="both", expand=True, padx=16, pady=10)
+
+            ctk.CTkLabel(left, text=label, font=ctk.CTkFont(size=11), text_color=COLORS["text_tertiary"], anchor="w").pack(fill="x")
+
+            disp = "*" * 16 if hide else (val[:50] + "..." if len(val) > 50 else val)
+            var = ctk.StringVar(value=disp)
+            ctk.CTkLabel(left, textvariable=var, font=ctk.CTkFont(size=14, family="Consolas" if hide or label in ["Host", "Port", "Username"] else None),
+                        text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+
+            # Right side - buttons
+            right = ctk.CTkFrame(fr, fg_color="transparent")
+            right.pack(side="right", padx=12, pady=10)
+
+            if copy:
+                def do_copy():
+                    ClipboardManager.copy(val)
+                    cb.configure(text="Copied!")
+                    self.after(1000, lambda: cb.configure(text="Copy"))
+                cb = ctk.CTkButton(right, text="Copy", width=60, height=32, corner_radius=8,
+                                  fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                  font=ctk.CTkFont(size=11), command=do_copy)
+                cb.pack(side="right", padx=(6, 0))
+
+            if hide:
+                show = [False]
+                def toggle():
+                    show[0] = not show[0]
+                    var.set(val if show[0] else "*" * 16)
+                    tb.configure(text="Hide" if show[0] else "Show")
+                tb = ctk.CTkButton(right, text="Show", width=60, height=32, corner_radius=8,
+                                  fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                                  font=ctk.CTkFont(size=11), command=toggle)
+                tb.pack(side="right")
 
     # ===== ADD =====
     def _view_add(self):
@@ -1851,6 +2366,18 @@ class App(ctk.CTk):
 
         self._input(frm, "Tags (comma separated)", "a_tags", "linux, mysql, us-east, team-backend")
 
+        # SSH Key (collapsible)
+        ssh_frame = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        ssh_frame.pack(fill="x", pady=(10, 0))
+        ssh_header = ctk.CTkFrame(ssh_frame, fg_color="transparent")
+        ssh_header.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(ssh_header, text="🔑 SSH Private Key (optional)", font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=COLORS["text_secondary"]).pack(side="left")
+        self.a_ssh_key = ctk.CTkTextbox(ssh_frame, height=80, corner_radius=6, border_width=1, border_color=COLORS["border"],
+                                        fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
+                                        font=ctk.CTkFont(size=10, family="Consolas"))
+        self.a_ssh_key.pack(fill="x", padx=10, pady=(0, 10))
+
         ctk.CTkLabel(frm, text="Notes", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
         self.a_notes = ctk.CTkTextbox(frm, height=60, corner_radius=6, border_width=1, border_color=COLORS["border"],
                                       fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11))
@@ -1872,9 +2399,10 @@ class App(ctk.CTk):
         pw = self.a_pw.get()
         if not name: self.a_err.configure(text="Name required"); return
         if not pw: self.a_err.configure(text="Password required"); return
+        ssh_key = self.a_ssh_key.get("1.0", "end").strip() if hasattr(self, 'a_ssh_key') else ""
         self.vault.add(name, self.a_type.get(), self.a_host.get().strip(), self.a_port.get().strip(),
                       self.a_user.get().strip(), pw, self.a_env.get(), self.a_proto.get(),
-                      self.a_tags.get().strip(), self.a_notes.get("1.0", "end").strip())
+                      self.a_tags.get().strip(), self.a_notes.get("1.0", "end").strip(), ssh_key)
         self._view_all()
 
     # ===== EDIT =====
@@ -1951,6 +2479,22 @@ class App(ctk.CTk):
 
         self._edit_input(frm, "Tags", "e_tags", e.get("tags", ""))
 
+        # SSH Key
+        ssh_frame = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        ssh_frame.pack(fill="x", pady=(10, 0))
+        ssh_header = ctk.CTkFrame(ssh_frame, fg_color="transparent")
+        ssh_header.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(ssh_header, text="🔑 SSH Private Key (optional)", font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=COLORS["text_secondary"]).pack(side="left")
+        self.e_ssh_key = ctk.CTkTextbox(ssh_frame, height=80, corner_radius=6, border_width=1, border_color=COLORS["border"],
+                                        fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
+                                        font=ctk.CTkFont(size=10, family="Consolas"))
+        self.e_ssh_key.pack(fill="x", padx=10, pady=(0, 10))
+        # Load existing SSH key
+        existing_ssh = self.vault.get_ssh_key(e["id"])
+        if existing_ssh:
+            self.e_ssh_key.insert("1.0", existing_ssh)
+
         ctk.CTkLabel(frm, text="Notes", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
         self.e_notes = ctk.CTkTextbox(frm, height=60, corner_radius=6, border_width=1, border_color=COLORS["border"],
                                       fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11))
@@ -1975,10 +2519,12 @@ class App(ctk.CTk):
         pw = self.e_pw.get()
         if not name: self.e_err.configure(text="Name required"); return
         if not pw: self.e_err.configure(text="Password required"); return
+        ssh_key = self.e_ssh_key.get("1.0", "end").strip() if hasattr(self, 'e_ssh_key') else ""
         self.vault.update(self.edit_id, name=name, type=self.e_type.get(), host=self.e_host.get().strip(),
                          port=self.e_port.get().strip(), username=self.e_user.get().strip(), password=pw,
                          environment=self.e_env.get(), protocol=self.e_proto.get(),
-                         tags=self.e_tags.get().strip(), notes=self.e_notes.get("1.0", "end").strip())
+                         tags=self.e_tags.get().strip(), notes=self.e_notes.get("1.0", "end").strip(),
+                         ssh_key=ssh_key)
         e = next((x for x in self.vault.list_all() if x["id"] == self.edit_id), None)
         if e: self._view_detail(e)
         else: self._view_all()
@@ -2032,7 +2578,7 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=12, weight="bold"), command=self._regen).pack(side="left", padx=(0, 8))
         ctk.CTkButton(br, text="Copy to Clipboard", width=140, height=40, corner_radius=10,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                     font=ctk.CTkFont(size=12), command=lambda: pyperclip.copy(self.gen_var.get())).pack(side="left")
+                     font=ctk.CTkFont(size=12), command=lambda: ClipboardManager.copy(self.gen_var.get())).pack(side="left")
 
         # Options section - modern card
         opt_card = ctk.CTkFrame(cnt, fg_color=COLORS["bg_secondary"], corner_radius=12)
@@ -2103,17 +2649,168 @@ class App(ctk.CTk):
         ctk.CTkLabel(self.content, text="Settings", font=ctk.CTkFont(size=20, weight="bold"),
                     text_color=COLORS["text_primary"]).pack(anchor="w", padx=20, pady=(20, 14))
 
-        cnt = ctk.CTkFrame(self.content, fg_color="transparent")
+        cnt = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
         cnt.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
+        settings = get_settings()
+
+        # Theme setting
+        self._setting_dropdown(cnt, "Theme", "Switch between dark and light mode",
+                               ["Dark", "Light"], "Dark" if settings.get("theme") == "dark" else "Light",
+                               self._change_theme)
+
+        # Startup
         self._setting(cnt, "Start with Windows", "Launch minimized at login", in_startup(), self._tog_startup)
-        self._info(cnt, "Global Hotkey", "Shift+V, P (chord - press Shift+V then P)")
+
+        # Clipboard auto-clear
+        clear_mins = settings.get("clipboard_clear_seconds", 300) // 60
+        self._setting_dropdown(cnt, "Clipboard Auto-Clear", "Automatically clear clipboard after copying passwords",
+                               ["1 min", "5 min", "10 min", "30 min", "Never"],
+                               f"{clear_mins} min" if clear_mins > 0 else "Never",
+                               self._change_clipboard_clear)
+
+        # Hotkey configuration
+        hotkey_first = settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        hotkey_second = settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        self._setting_hotkey(cnt, "Global Hotkey", f"Current: {hotkey_first}, {hotkey_second}",
+                            hotkey_first, hotkey_second)
+
+        # Info sections
         self._info(cnt, "Vault Location", str(get_vault_path()))
         self._info(cnt, "2FA", "Enabled" if self.vault.totp_enabled else "Disabled")
         self._info(cnt, "Encryption", f"AES-256-GCM + {'Argon2id' if HAS_ARGON2 else 'Scrypt'}")
+        self._info(cnt, "Password Expiry", f"Credentials older than {PASSWORD_EXPIRY_DAYS} days are flagged")
         self._info(cnt, "PDF Export", "Available" if _load_pdf_modules() else "Install: pip install reportlab PyPDF2")
 
+        # HIBP Check button
+        hibp_frame = ctk.CTkFrame(cnt, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        hibp_frame.pack(fill="x", pady=(0, 10))
+        hibp_inner = ctk.CTkFrame(hibp_frame, fg_color="transparent")
+        hibp_inner.pack(fill="x", padx=14, pady=12)
+        ctk.CTkLabel(hibp_inner, text="Breach Detection", font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+        ctk.CTkLabel(hibp_inner, text="Check passwords against Have I Been Pwned (sends only hash prefix)",
+                    font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(2, 8))
+        ctk.CTkButton(hibp_inner, text="Check All Passwords", height=32, corner_radius=6,
+                     fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                     font=ctk.CTkFont(size=11), command=self._check_all_hibp).pack(anchor="w")
+
         ctk.CTkLabel(cnt, text=f"SecureVault v{APP_VERSION}", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(pady=(14, 0))
+
+    def _change_theme(self, value):
+        theme = "dark" if value == "Dark" else "light"
+        get_settings().set("theme", theme)
+        ctk.set_appearance_mode(theme)
+        self.configure(fg_color=COLORS["bg_primary"])
+        # Refresh the view to apply new colors
+        self._view_settings()
+
+    def _change_clipboard_clear(self, value):
+        time_map = {"1 min": 60, "5 min": 300, "10 min": 600, "30 min": 1800, "Never": 0}
+        get_settings().set("clipboard_clear_seconds", time_map.get(value, 300))
+
+    def _setting_dropdown(self, parent, title: str, desc: str, options: list, current: str, cmd: Callable):
+        fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        fr.pack(fill="x", pady=(0, 10))
+        inner = ctk.CTkFrame(fr, fg_color="transparent")
+        inner.pack(fill="x", padx=14, pady=12)
+        ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+        ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x")
+        combo = ctk.CTkComboBox(inner, values=options, width=120, height=32, corner_radius=6,
+                               border_width=1, border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
+                               dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11), command=cmd)
+        combo.set(current)
+        combo.place(relx=1.0, rely=0.5, anchor="e")
+
+    def _setting_hotkey(self, parent, title: str, desc: str, first: str, second: str):
+        fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        fr.pack(fill="x", pady=(0, 10))
+        inner = ctk.CTkFrame(fr, fg_color="transparent")
+        inner.pack(fill="x", padx=14, pady=12)
+        ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=13, weight="bold"), text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+        ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x")
+
+        btn_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(8, 0))
+
+        ctk.CTkLabel(btn_frame, text="First:", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(side="left")
+        self.hotkey_first_combo = ctk.CTkComboBox(btn_frame, values=["shift+v", "ctrl+shift+v", "alt+v", "ctrl+alt+v"],
+                                                   width=110, height=28, corner_radius=6, font=ctk.CTkFont(size=10),
+                                                   fg_color=COLORS["bg_tertiary"], border_color=COLORS["border"])
+        self.hotkey_first_combo.set(first)
+        self.hotkey_first_combo.pack(side="left", padx=(4, 12))
+
+        ctk.CTkLabel(btn_frame, text="Then:", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(side="left")
+        self.hotkey_second_combo = ctk.CTkComboBox(btn_frame, values=["p", "v", "k", "s"],
+                                                    width=60, height=28, corner_radius=6, font=ctk.CTkFont(size=10),
+                                                    fg_color=COLORS["bg_tertiary"], border_color=COLORS["border"])
+        self.hotkey_second_combo.set(second)
+        self.hotkey_second_combo.pack(side="left", padx=(4, 12))
+
+        ctk.CTkButton(btn_frame, text="Apply", width=60, height=28, corner_radius=6,
+                     fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                     font=ctk.CTkFont(size=10), command=self._apply_hotkey).pack(side="left")
+
+    def _apply_hotkey(self):
+        settings = get_settings()
+        settings.set("hotkey_first", self.hotkey_first_combo.get())
+        settings.set("hotkey_second", self.hotkey_second_combo.get())
+        if self.hotkey_handler:
+            self.hotkey_handler.reload_config()
+        self._view_settings()
+
+    def _check_all_hibp(self):
+        """Check all passwords against HIBP."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Breach Check Results")
+        dialog.geometry("500x400")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=COLORS["bg_primary"])
+
+        ctk.CTkLabel(dialog, text="Checking passwords...", font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(pady=20)
+
+        progress = ctk.CTkProgressBar(dialog, width=400)
+        progress.pack(pady=10)
+        progress.set(0)
+
+        results_frame = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=250)
+        results_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        def check_passwords():
+            entries = self.vault.list_all()
+            breached = []
+            for i, e in enumerate(entries):
+                progress.set((i + 1) / len(entries))
+                dialog.update()
+                try:
+                    pw = self.vault.get_password(e["id"], track=False)
+                    is_breached, count, msg = check_password_hibp(pw)
+                    if is_breached and count > 0:
+                        breached.append((e["name"], count))
+                except:
+                    pass
+
+            # Show results
+            for w in results_frame.winfo_children():
+                w.destroy()
+
+            if breached:
+                ctk.CTkLabel(results_frame, text=f"⚠️ {len(breached)} password(s) found in breaches!",
+                            font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["danger"]).pack(pady=(0, 10))
+                for name, count in breached:
+                    fr = ctk.CTkFrame(results_frame, fg_color=COLORS["bg_secondary"], corner_radius=6)
+                    fr.pack(fill="x", pady=2)
+                    ctk.CTkLabel(fr, text=f"{name}: found {count:,} times",
+                                font=ctk.CTkFont(size=11), text_color=COLORS["danger"]).pack(padx=10, pady=6)
+            else:
+                ctk.CTkLabel(results_frame, text="✓ No passwords found in known breaches!",
+                            font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["success"]).pack(pady=20)
+
+            Btn(dialog, text="Close", width=100, command=dialog.destroy).pack(pady=10)
+
+        threading.Thread(target=check_passwords, daemon=True).start()
 
     def _setting(self, parent, title: str, desc: str, val: bool, cmd: Callable):
         fr = ctk.CTkFrame(parent, fg_color=COLORS["bg_secondary"], corner_radius=8)
