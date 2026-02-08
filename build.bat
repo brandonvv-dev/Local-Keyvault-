@@ -1,12 +1,12 @@
 @echo off
 REM =============================================
-REM  SecureVault Keychain - Build Script (Windows)
+REM  SecureVault v3.1.0 - Build Script (Windows)
 REM  Creates a standalone .exe password manager
 REM =============================================
 
 echo.
 echo  ========================================
-echo   SecureVault Keychain - Windows Build
+echo   SecureVault v3.1.0 - Windows Build
 echo  ========================================
 echo.
 
@@ -30,60 +30,77 @@ call venv\Scripts\activate.bat
 
 REM Upgrade pip
 echo  Upgrading pip...
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip >nul 2>&1
 
 REM Install dependencies
 echo  Installing dependencies...
-pip install -r requirements.txt
+pip install -r requirements.txt >nul 2>&1
 
 REM Build the executable
 echo.
 echo  Building SecureVault.exe...
+echo  This may take a few minutes...
 echo.
 
 REM Check if icon exists
 set ICON_FLAG=
 if exist "icon.ico" set ICON_FLAG=--icon "icon.ico"
 
-pyinstaller ^
-    --onefile ^
-    --windowed ^
-    --name "SecureVault" ^
-    %ICON_FLAG% ^
-    --clean ^
-    --noconfirm ^
-    --hidden-import=argon2 ^
-    --hidden-import=argon2.low_level ^
-    --hidden-import=pyotp ^
-    --hidden-import=qrcode ^
-    --hidden-import=PIL ^
-    --hidden-import=PIL.Image ^
-    --hidden-import=PIL.ImageDraw ^
-    --hidden-import=customtkinter ^
-    --hidden-import=pystray ^
-    --hidden-import=pystray._win32 ^
-    --hidden-import=keyboard ^
-    --hidden-import=pyautogui ^
-    --hidden-import=pyperclip ^
-    --collect-all customtkinter ^
-    --collect-all pystray ^
-    keychain.py
+REM Use spec file if exists, otherwise use command line
+if exist "SecureVault.spec" (
+    echo  Using optimized spec file...
+    pyinstaller SecureVault.spec --clean --noconfirm
+) else (
+    pyinstaller ^
+        --onefile ^
+        --windowed ^
+        --name "SecureVault" ^
+        %ICON_FLAG% ^
+        --clean ^
+        --noconfirm ^
+        --hidden-import=argon2 ^
+        --hidden-import=argon2.low_level ^
+        --hidden-import=pyotp ^
+        --hidden-import=qrcode ^
+        --hidden-import=PIL ^
+        --hidden-import=PIL.Image ^
+        --hidden-import=PIL.ImageDraw ^
+        --hidden-import=customtkinter ^
+        --hidden-import=pystray ^
+        --hidden-import=pystray._win32 ^
+        --hidden-import=keyboard ^
+        --hidden-import=pyautogui ^
+        --hidden-import=pyperclip ^
+        --hidden-import=reportlab ^
+        --hidden-import=reportlab.lib ^
+        --hidden-import=reportlab.platypus ^
+        --hidden-import=PyPDF2 ^
+        --collect-all customtkinter ^
+        --collect-all pystray ^
+        keychain.py
+)
 
-echo.
-echo  ========================================
-echo   Build Complete!
-echo  ========================================
-echo.
-echo   Your executable is ready at:
-echo   dist\SecureVault.exe
-echo.
-echo   Features:
-echo   - System tray icon (runs in background)
-echo   - Global hotkey: Ctrl+Shift+V
-echo   - Quick access popup with Most Used
-echo   - Auto-type passwords into any field
-echo.
-echo   Share this file with your friends!
-echo.
+if exist "dist\SecureVault.exe" (
+    echo.
+    echo  ========================================
+    echo   Build Complete!
+    echo  ========================================
+    echo.
+    echo   Your executable is ready at:
+    echo   dist\SecureVault.exe
+    echo.
+    echo   Features:
+    echo   - System tray icon (runs in background)
+    echo   - Global hotkey: Shift+V, P (chord)
+    echo   - Quick access popup for credentials
+    echo   - Auto-type passwords into any field
+    echo   - Password-protected PDF export
+    echo   - DevOps/SysAdmin focused categories
+    echo.
+) else (
+    echo.
+    echo  ERROR: Build failed! Check the output above.
+    echo.
+)
 
 pause

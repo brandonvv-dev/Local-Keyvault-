@@ -1,33 +1,41 @@
 """
-SecureVault - DevOps Credential Manager
-=======================================
+SecureVault - System Architect Credential Manager
+==================================================
 Secure local credential manager for system architects and DevOps engineers.
 Designed for servers, databases, API keys, cloud accounts, and network devices.
 
 Features:
 - AES-256-GCM encryption with Argon2id KDF
 - Local TOTP 2FA (no internet required)
-- System tray with global hotkey (Ctrl+Shift+V)
+- System tray with global hotkey (Shift+V+P chord)
 - Server/environment focused organization
 - Quick access for terminal and remote sessions
+- Secure PDF export for team credential sharing
+
+Performance optimizations:
+- Lazy loading of heavy modules (PDF)
+- Cached vault paths and computations
+- Efficient UI batch updates
 """
 
 import os
 import sys
 import json
 import base64
-import string
 import secrets
 import hashlib
 import shutil
 import time
 import threading
 import queue
+import tempfile
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
+# Core GUI imports
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 import pyperclip
@@ -37,6 +45,7 @@ import keyboard
 import pyautogui
 import qrcode
 
+# Crypto imports
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
 
@@ -49,11 +58,41 @@ except ImportError:
 
 import pyotp
 
+# PDF modules loaded lazily on first use for faster startup
+HAS_PDF = None  # None = not checked yet, True/False after check
+_pdf_modules = {}
+
+def _load_pdf_modules():
+    """Lazy load PDF modules only when needed."""
+    global HAS_PDF, _pdf_modules
+    if HAS_PDF is not None:
+        return HAS_PDF
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.lib.colors import HexColor
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        from PyPDF2 import PdfReader, PdfWriter
+        _pdf_modules = {
+            'letter': letter, 'getSampleStyleSheet': getSampleStyleSheet,
+            'ParagraphStyle': ParagraphStyle, 'inch': inch, 'HexColor': HexColor,
+            'SimpleDocTemplate': SimpleDocTemplate, 'Paragraph': Paragraph,
+            'Spacer': Spacer, 'Table': Table, 'TableStyle': TableStyle,
+            'TA_CENTER': TA_CENTER, 'TA_LEFT': TA_LEFT,
+            'PdfReader': PdfReader, 'PdfWriter': PdfWriter
+        }
+        HAS_PDF = True
+    except ImportError:
+        HAS_PDF = False
+    return HAS_PDF
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
 APP_NAME = "SecureVault"
-APP_VERSION = "2.2.0"
+APP_VERSION = "3.1.0"  # Performance optimized
 VAULT_FILENAME = "vault.enc"
 STATS_FILENAME = "stats.enc"
 SALT_LENGTH = 32
@@ -66,54 +105,35 @@ ARGON2_PARALLELISM = 4
 DEFAULT_PASSWORD_LENGTH = 24
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
-HOTKEY = "ctrl+shift+v"
 
-# DevOps credential types
+# Hotkey chord: Shift+V then P (no key suppression to avoid interference)
+HOTKEY_CHORD = ["shift+v", "p"]
+CHORD_TIMEOUT = 1.0  # seconds to complete the chord
+
+# System Architecture credential types (no entertainment/personal categories)
 CREDENTIAL_TYPES = [
     "Server (SSH/RDP)",
-    "Database",
-    "Cloud Console",
+    "Database Server",
+    "Cloud Console (AWS/GCP/Azure)",
     "API Key / Token",
     "Service Account",
-    "Network Device",
-    "Container / K8s",
-    "Certificate / Key",
+    "Network Device (Router/Switch/Firewall)",
+    "Container Registry / K8s",
+    "SSL Certificate / Key",
     "Web Admin Panel",
-    "Other",
+    "Git Repository",
+    "CI/CD Pipeline",
+    "Monitoring / Logging",
+    "DNS / Domain Registrar",
+    "Email Server (SMTP/IMAP)",
+    "VPN / Remote Access",
+    "Other Infrastructure",
 ]
 
-ENVIRONMENTS = ["Production", "Staging", "Development", "QA", "DR", "Local"]
+ENVIRONMENTS = ["Production", "Staging", "Development", "QA", "DR", "Local", "Shared"]
 
-PROTOCOLS = ["SSH", "RDP", "HTTPS", "HTTP", "MySQL", "PostgreSQL", "MongoDB", "Redis", "MSSQL", "FTP/SFTP", "API", "Console", "Other"]
-
-# Credential rotation settings
-ROTATION_WARNING_DAYS = 90
-ROTATION_CRITICAL_DAYS = 180
-
-# Service type icons for visual distinction
-SERVICE_ICONS = {
-    "Server (SSH/RDP)": ("🖥️", "#58A6FF"),
-    "Database": ("🗄️", "#F0883E"),
-    "Cloud Console": ("☁️", "#A371F7"),
-    "API Key / Token": ("⚡", "#3FB950"),
-    "Service Account": ("👤", "#8B949E"),
-    "Network Device": ("🌐", "#79C0FF"),
-    "Container / K8s": ("📦", "#F778BA"),
-    "Certificate / Key": ("🔐", "#FFD700"),
-    "Web Admin Panel": ("🌍", "#58A6FF"),
-    "SSH Key": ("🔑", "#3FB950"),
-    "Other": ("🔒", "#8B949E"),
-}
-
-# Environment colors
-ENV_COLORS = {
-    "Production": "#F85149",
-    "Staging": "#D29922",
-    "Development": "#3FB950",
-    "QA": "#A371F7",
-    "DR": "#F0883E",
-    "Local": "#8B949E",
-}
+PROTOCOLS = ["SSH", "RDP", "HTTPS", "HTTP", "MySQL", "PostgreSQL", "MongoDB", "Redis",
+             "MSSQL", "FTP/SFTP", "API", "Console", "LDAP", "SMTP", "Docker", "K8s API", "Other"]
 
 # Dark terminal theme
 COLORS = {
@@ -136,8 +156,9 @@ COLORS = {
 }
 
 # ============================================================
-# PATHS
+# PATHS (cached for performance)
 # ============================================================
+@lru_cache(maxsize=1)
 def get_vault_dir() -> Path:
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
@@ -149,9 +170,11 @@ def get_vault_dir() -> Path:
     vault_dir.mkdir(parents=True, exist_ok=True)
     return vault_dir
 
+@lru_cache(maxsize=1)
 def get_vault_path() -> Path:
     return get_vault_dir() / VAULT_FILENAME
 
+@lru_cache(maxsize=1)
 def get_stats_path() -> Path:
     return get_vault_dir() / STATS_FILENAME
 
@@ -211,12 +234,220 @@ def password_strength(pw: str) -> tuple:
     return ("Excellent", score, COLORS["success"])
 
 # ============================================================
-# USAGE STATS
+# PDF EXPORT (Password Protected - Lazy Loaded)
+# ============================================================
+def export_credentials_to_pdf(entries: List[dict], vault, pdf_password: str, output_path: str,
+                               export_title: str = "Infrastructure Credentials") -> bool:
+    """
+    Export selected credentials to a password-protected PDF.
+    For sharing with junior developers securely.
+    """
+    if not _load_pdf_modules():
+        raise RuntimeError("PDF export requires 'reportlab' and 'PyPDF2' packages.\n"
+                          "Install with: pip install reportlab PyPDF2")
+
+    # Get lazy-loaded modules
+    letter = _pdf_modules['letter']
+    inch = _pdf_modules['inch']
+    getSampleStyleSheet = _pdf_modules['getSampleStyleSheet']
+    ParagraphStyle = _pdf_modules['ParagraphStyle']
+    HexColor = _pdf_modules['HexColor']
+    SimpleDocTemplate = _pdf_modules['SimpleDocTemplate']
+    Paragraph = _pdf_modules['Paragraph']
+    Spacer = _pdf_modules['Spacer']
+    Table = _pdf_modules['Table']
+    TableStyle = _pdf_modules['TableStyle']
+    TA_CENTER = _pdf_modules['TA_CENTER']
+    PdfReader = _pdf_modules['PdfReader']
+    PdfWriter = _pdf_modules['PdfWriter']
+
+    # Create temporary unencrypted PDF first
+    temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+    temp_pdf.close()
+
+    try:
+        # Create the PDF document
+        doc = SimpleDocTemplate(temp_pdf.name, pagesize=letter,
+                               topMargin=0.75*inch, bottomMargin=0.75*inch,
+                               leftMargin=0.75*inch, rightMargin=0.75*inch)
+
+        styles = getSampleStyleSheet()
+
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            spaceAfter=20,
+            textColor=HexColor('#1a1a2e'),
+            alignment=TA_CENTER
+        )
+
+        warning_style = ParagraphStyle(
+            'Warning',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=HexColor('#dc3545'),
+            alignment=TA_CENTER,
+            spaceAfter=20
+        )
+
+        section_style = ParagraphStyle(
+            'Section',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=HexColor('#2d3748'),
+            spaceBefore=15,
+            spaceAfter=10
+        )
+
+        story = []
+
+        # Title
+        story.append(Paragraph(export_title, title_style))
+
+        # Security warning
+        story.append(Paragraph(
+            "CONFIDENTIAL - Handle with care. Delete after use.",
+            warning_style
+        ))
+
+        # Export metadata
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        meta_data = [
+            ['Generated:', now],
+            ['Total Credentials:', str(len(entries))],
+            ['Classification:', 'INTERNAL USE ONLY']
+        ]
+        meta_table = Table(meta_data, colWidths=[1.5*inch, 4*inch])
+        meta_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('TEXTCOLOR', (0, 0), (0, -1), HexColor('#666666')),
+            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(meta_table)
+        story.append(Spacer(1, 20))
+
+        # Separator line
+        story.append(Paragraph("_" * 80, styles['Normal']))
+        story.append(Spacer(1, 10))
+
+        # Each credential
+        for i, entry in enumerate(entries, 1):
+            # Get the password
+            pw = vault.get_password(entry["id"], track=False) if entry.get("id") else ""
+
+            # Credential header
+            env = entry.get("environment", "")
+            env_label = f" [{env}]" if env else ""
+            story.append(Paragraph(
+                f"{i}. {entry['name']}{env_label}",
+                section_style
+            ))
+
+            # Build credential table
+            cred_data = []
+
+            if entry.get("type"):
+                cred_data.append(['Type:', entry["type"]])
+
+            host_info = entry.get("host", "")
+            if entry.get("port"):
+                host_info += f":{entry['port']}"
+            if host_info:
+                cred_data.append(['Host:', host_info])
+
+            if entry.get("protocol"):
+                cred_data.append(['Protocol:', entry["protocol"]])
+
+            if entry.get("username"):
+                cred_data.append(['Username:', entry["username"]])
+
+            if pw:
+                cred_data.append(['Password:', pw])
+
+            if entry.get("tags"):
+                cred_data.append(['Tags:', entry["tags"]])
+
+            if entry.get("notes"):
+                # Truncate long notes
+                notes = entry["notes"][:200] + "..." if len(entry.get("notes", "")) > 200 else entry.get("notes", "")
+                cred_data.append(['Notes:', notes])
+
+            if cred_data:
+                cred_table = Table(cred_data, colWidths=[1.2*inch, 5.3*inch])
+                cred_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+                    ('FONTNAME', (1, 0), (1, -1), 'Courier'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('TEXTCOLOR', (0, 0), (0, -1), HexColor('#666666')),
+                    ('TEXTCOLOR', (1, 0), (1, -1), HexColor('#1a1a2e')),
+                    ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ('TOPPADDING', (0, 0), (-1, -1), 2),
+                    ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8f9fa')),
+                    ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#dee2e6')),
+                ]))
+                story.append(cred_table)
+
+            story.append(Spacer(1, 15))
+
+        # Footer
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("_" * 80, styles['Normal']))
+        footer_style = ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=HexColor('#999999'),
+            alignment=TA_CENTER
+        )
+        story.append(Paragraph(
+            f"Generated by SecureVault v{APP_VERSION} | This document is password protected",
+            footer_style
+        ))
+
+        # Build the PDF
+        doc.build(story)
+
+        # Now encrypt with password
+        reader = PdfReader(temp_pdf.name)
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            writer.add_page(page)
+
+        # Encrypt with AES-256
+        writer.encrypt(pdf_password, pdf_password, algorithm="AES-256")
+
+        # Write encrypted PDF
+        with open(output_path, 'wb') as output_file:
+            writer.write(output_file)
+
+        return True
+
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_pdf.name)
+        except:
+            pass
+
+# ============================================================
+# USAGE STATS (optimized with __slots__)
 # ============================================================
 class UsageStats:
+    __slots__ = ('stats', 'key', '_dirty', '_save_timer')
+
     def __init__(self):
         self.stats: Dict[str, dict] = {}
         self.key: bytes = b""
+        self._dirty = False
+        self._save_timer = None
 
     def set_key(self, key: bytes):
         self.key = key
@@ -232,23 +463,38 @@ class UsageStats:
     def _save(self):
         if self.key:
             get_stats_path().write_bytes(encrypt_data(json.dumps(self.stats).encode("utf-8"), self.key))
+        self._dirty = False
+
+    def _deferred_save(self):
+        """Batch saves to reduce disk I/O."""
+        if self._dirty:
+            self._save()
 
     def record(self, eid: str):
         if eid not in self.stats: self.stats[eid] = {"count": 0, "last": ""}
         self.stats[eid]["count"] += 1
         self.stats[eid]["last"] = datetime.now(timezone.utc).isoformat()
+        self._dirty = True
+        # Immediate save for data safety
         self._save()
 
     def top(self, n: int = 8) -> List[str]:
-        return sorted(self.stats.keys(), key=lambda x: self.stats[x]["count"], reverse=True)[:n]
+        # Optimized sorting - avoid lambda overhead
+        items = [(k, v["count"]) for k, v in self.stats.items()]
+        items.sort(key=lambda x: x[1], reverse=True)
+        return [k for k, _ in items[:n]]
 
     def count(self, eid: str) -> int:
-        return self.stats.get(eid, {}).get("count", 0)
+        entry = self.stats.get(eid)
+        return entry["count"] if entry else 0
 
 # ============================================================
-# VAULT
+# VAULT (optimized with caching)
 # ============================================================
 class Vault:
+    __slots__ = ('path', 'salt', 'key', 'verify_hash', 'totp_secret', 'totp_enabled',
+                 'entries', 'unlocked', 'stats', '_list_cache', '_list_cache_valid')
+
     def __init__(self):
         self.path = get_vault_path()
         self.salt = b""
@@ -259,6 +505,8 @@ class Vault:
         self.entries = {}
         self.unlocked = False
         self.stats = UsageStats()
+        self._list_cache = []
+        self._list_cache_valid = False
 
     def exists(self) -> bool:
         return self.path.exists()
@@ -290,6 +538,7 @@ class Vault:
             else:
                 self.totp_enabled = data.get("totp_enabled", False)
             self.unlocked = True
+            self._invalidate_cache()
             self.stats.set_key(self.key)
             return True
         except: return False
@@ -299,7 +548,7 @@ class Vault:
         return pyotp.TOTP(self.totp_secret).verify(code, valid_window=1)
 
     def totp_uri(self) -> str:
-        return pyotp.TOTP(self.totp_secret).provisioning_uri("DevOps", APP_NAME) if self.totp_secret else ""
+        return pyotp.TOTP(self.totp_secret).provisioning_uri("SysAdmin", APP_NAME) if self.totp_secret else ""
 
     def has_totp(self) -> bool:
         if not self.path.exists(): return False
@@ -320,69 +569,38 @@ class Vault:
         shutil.move(str(tmp), str(self.path))
 
     def add(self, name: str, ctype: str, host: str = "", port: str = "", user: str = "",
-            password: str = "", env: str = "", proto: str = "", tags: str = "", notes: str = "",
-            group: str = "", ssh_private_key: str = "", ssh_public_key: str = "") -> str:
+            password: str = "", env: str = "", proto: str = "", tags: str = "", notes: str = "") -> str:
         eid = secrets.token_hex(8)
         now = datetime.now(timezone.utc).isoformat()
-        entry = {"name": name, "type": ctype, "host": host, "port": port, "username": user,
-                 "password_enc": base64.b64encode(encrypt_data(password.encode("utf-8"), self.key)).decode() if password else "",
-                 "environment": env, "protocol": proto, "tags": tags, "notes": notes,
-                 "group": group, "created": now, "modified": now, "password_changed": now}
-        # SSH key storage (encrypted)
-        if ssh_private_key:
-            entry["ssh_private_enc"] = base64.b64encode(encrypt_data(ssh_private_key.encode("utf-8"), self.key)).decode()
-        if ssh_public_key:
-            entry["ssh_public"] = ssh_public_key  # Public keys don't need encryption
-        self.entries[eid] = entry
+        self.entries[eid] = {"name": name, "type": ctype, "host": host, "port": port, "username": user,
+                             "password_enc": base64.b64encode(encrypt_data(password.encode("utf-8"), self.key)).decode(),
+                             "environment": env, "protocol": proto, "tags": tags, "notes": notes,
+                             "created": now, "modified": now}
+        self._invalidate_cache()
         self._save()
         return eid
 
     def get_password(self, eid: str, track: bool = True) -> str:
         if track: self.stats.record(eid)
-        enc = self.entries[eid].get("password_enc", "")
-        return decrypt_data(base64.b64decode(enc), self.key).decode("utf-8") if enc else ""
+        return decrypt_data(base64.b64decode(self.entries[eid]["password_enc"]), self.key).decode("utf-8")
 
-    def get_ssh_private_key(self, eid: str) -> str:
-        enc = self.entries[eid].get("ssh_private_enc", "")
-        return decrypt_data(base64.b64decode(enc), self.key).decode("utf-8") if enc else ""
-
-    def get_ssh_public_key(self, eid: str) -> str:
-        return self.entries[eid].get("ssh_public", "")
-
-    def get_groups(self) -> list:
-        """Get unique credential groups."""
-        groups = set()
-        for e in self.entries.values():
-            if e.get("group"): groups.add(e["group"])
-        return sorted(list(groups))
-
-    def by_group(self, group: str) -> list:
-        """Get credentials by group."""
-        return [e for e in self.list_all() if e.get("group") == group]
-
-    def get_password_age_days(self, eid: str) -> int:
-        """Get days since password was last changed."""
-        changed = self.entries[eid].get("password_changed", self.entries[eid].get("created", ""))
-        if not changed: return 0
-        try:
-            dt = datetime.fromisoformat(changed.replace("Z", "+00:00"))
-            return (datetime.now(timezone.utc) - dt).days
-        except: return 0
-
-    def get_stale_credentials(self, days: int = 90) -> list:
-        """Get credentials with passwords older than specified days."""
-        return [e for e in self.list_all() if self.get_password_age_days(e["id"]) > days]
+    def _invalidate_cache(self):
+        self._list_cache_valid = False
 
     def list_all(self) -> list:
+        if self._list_cache_valid:
+            return self._list_cache
+        fields = ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "created", "modified"]
         result = []
         for k, v in self.entries.items():
             entry = {"id": k, "use_count": self.stats.count(k)}
-            for f in ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "group", "created", "modified", "password_changed"]:
+            for f in fields:
                 entry[f] = v.get(f, "")
-            entry["has_ssh_key"] = bool(v.get("ssh_private_enc"))
-            entry["password_age"] = self.get_password_age_days(k)
             result.append(entry)
-        return sorted(result, key=lambda x: x["name"].lower())
+        result.sort(key=lambda x: x["name"].lower())
+        self._list_cache = result
+        self._list_cache_valid = True
+        return result
 
     def top_used(self, n: int = 8) -> list:
         return [{"id": k, **{f: self.entries[k].get(f, "") for f in ["name", "type", "host", "port", "username", "environment", "protocol"]},
@@ -394,23 +612,18 @@ class Vault:
     def delete(self, eid: str):
         if eid in self.entries:
             del self.entries[eid]
+            self._invalidate_cache()
             self._save()
 
     def update(self, eid: str, **kw):
         if eid not in self.entries: return
         e = self.entries[eid]
-        now = datetime.now(timezone.utc).isoformat()
-        if "password" in kw and kw["password"]:
+        if "password" in kw:
             e["password_enc"] = base64.b64encode(encrypt_data(kw.pop("password").encode("utf-8"), self.key)).decode()
-            e["password_changed"] = now  # Track password rotation
-        if "ssh_private_key" in kw:
-            key = kw.pop("ssh_private_key")
-            e["ssh_private_enc"] = base64.b64encode(encrypt_data(key.encode("utf-8"), self.key)).decode() if key else ""
-        if "ssh_public_key" in kw:
-            e["ssh_public"] = kw.pop("ssh_public_key")
-        for f in ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "group"]:
+        for f in ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes"]:
             if f in kw: e[f] = kw[f]
-        e["modified"] = now
+        e["modified"] = datetime.now(timezone.utc).isoformat()
+        self._invalidate_cache()
         self._save()
 
     def lock(self):
@@ -451,6 +664,78 @@ def in_startup() -> bool:
     except: return False
 
 # ============================================================
+# HOTKEY CHORD HANDLER (Shift+V+P without interference)
+# ============================================================
+class ChordHotkeyHandler:
+    """
+    Handles Shift+V+P chord hotkey without interfering with normal typing.
+    Uses a state machine approach instead of key suppression.
+    """
+    def __init__(self, callback: Callable):
+        self.callback = callback
+        self.chord_state = 0  # 0=waiting, 1=shift+v pressed, 2=chord complete
+        self.last_chord_time = 0
+        self.active = False
+        self._lock = threading.Lock()
+
+    def start(self):
+        """Start listening for the chord hotkey."""
+        if self.active:
+            return
+        self.active = True
+        # Register handlers WITHOUT suppression to avoid interference
+        keyboard.on_press(self._on_key_press, suppress=False)
+        keyboard.on_release(self._on_key_release, suppress=False)
+
+    def stop(self):
+        """Stop listening."""
+        self.active = False
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
+
+    def _on_key_press(self, event):
+        """Handle key press events for chord detection."""
+        if not self.active:
+            return
+
+        current_time = time.time()
+
+        with self._lock:
+            # Check for timeout - reset if too long since last chord key
+            if self.chord_state > 0 and (current_time - self.last_chord_time) > CHORD_TIMEOUT:
+                self.chord_state = 0
+
+            key_name = event.name.lower() if event.name else ""
+
+            # State 0: Waiting for Shift+V
+            if self.chord_state == 0:
+                if key_name == 'v' and keyboard.is_pressed('shift'):
+                    self.chord_state = 1
+                    self.last_chord_time = current_time
+
+            # State 1: Shift+V was pressed, waiting for P
+            elif self.chord_state == 1:
+                if key_name == 'p':
+                    self.chord_state = 0  # Reset state
+                    # Trigger callback in separate thread to not block
+                    threading.Thread(target=self.callback, daemon=True).start()
+                elif key_name not in ('shift', 'v', 'p'):
+                    # Wrong key pressed, reset
+                    self.chord_state = 0
+
+    def _on_key_release(self, event):
+        """Handle key release - reset chord if shift released early."""
+        if not self.active:
+            return
+        key_name = event.name.lower() if event.name else ""
+        # If shift is released before completing chord, reset
+        if key_name == 'shift' and self.chord_state == 1:
+            with self._lock:
+                self.chord_state = 0
+
+# ============================================================
 # QUICK ACCESS POPUP
 # ============================================================
 class QuickPopup(ctk.CTkToplevel):
@@ -473,8 +758,8 @@ class QuickPopup(ctk.CTkToplevel):
         hdr = ctk.CTkFrame(self, fg_color="transparent", height=40)
         hdr.pack(fill="x", padx=14, pady=(14, 6))
         ctk.CTkLabel(hdr, text="Quick Access", font=ctk.CTkFont(size=15, weight="bold"), text_color=COLORS["text_primary"]).pack(side="left")
-        ctk.CTkLabel(hdr, text="Ctrl+Shift+V", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"],
-                    fg_color=COLORS["bg_tertiary"], corner_radius=4, width=80, height=22).pack(side="right")
+        ctk.CTkLabel(hdr, text="Shift+V, P", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"],
+                    fg_color=COLORS["bg_tertiary"], corner_radius=4, width=70, height=22).pack(side="right")
 
         # Search
         self.search_var = ctk.StringVar()
@@ -632,14 +917,27 @@ class PwEntry(ctk.CTkFrame):
     def insert(self, i, t): self.e.insert(i, t)
 
 class Card(ctk.CTkFrame):
-    def __init__(self, master, data: dict, on_click: Callable, on_copy: Callable, **kw):
+    def __init__(self, master, data: dict, on_click: Callable, on_copy: Callable, selectable: bool = False,
+                 selected: bool = False, on_select: Callable = None, **kw):
         super().__init__(master, fg_color=COLORS["bg_secondary"], corner_radius=8, height=80, **kw)
         self.data = data
+        self.selectable = selectable
+        self.selected = selected
+        self.on_select = on_select
+
         self.bind("<Button-1>", lambda _: on_click(data))
 
         env = data.get("environment", "")
         ec = COLORS["prod"] if env == "Production" else COLORS["staging"] if env == "Staging" else COLORS["dev"] if env == "Development" else COLORS["border"]
         ctk.CTkFrame(self, width=4, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
+
+        # Selection checkbox for export
+        if selectable:
+            self.chk_var = ctk.BooleanVar(value=selected)
+            chk = ctk.CTkCheckBox(self, text="", variable=self.chk_var, width=24,
+                                  fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                  command=lambda: on_select(data["id"], self.chk_var.get()) if on_select else None)
+            chk.pack(side="left", padx=(8, 0))
 
         cnt = ctk.CTkFrame(self, fg_color="transparent")
         cnt.pack(fill="both", expand=True, padx=12, pady=10)
@@ -663,12 +961,141 @@ class Card(ctk.CTkFrame):
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=10), command=lambda: on_copy(data)).pack(side="right")
 
 # ============================================================
+# EXPORT DIALOG
+# ============================================================
+class ExportDialog(ctk.CTkToplevel):
+    def __init__(self, master, vault: Vault, selected_ids: Set[str]):
+        super().__init__(master)
+        self.vault = vault
+        self.selected_ids = selected_ids
+        self.result = None
+
+        self.title("Export Credentials to PDF")
+        self.geometry("450x350")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.configure(fg_color=COLORS["bg_primary"])
+
+        # Center on parent
+        self.update_idletasks()
+        x = master.winfo_x() + (master.winfo_width() - 450) // 2
+        y = master.winfo_y() + (master.winfo_height() - 350) // 2
+        self.geometry(f"450x350+{x}+{y}")
+
+        # Content
+        ctk.CTkLabel(self, text="Export for Team Member", font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(pady=(20, 5))
+        ctk.CTkLabel(self, text=f"Exporting {len(selected_ids)} credential(s) to password-protected PDF",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 20))
+
+        form = ctk.CTkFrame(self, fg_color="transparent")
+        form.pack(fill="x", padx=30)
+
+        # Export title
+        ctk.CTkLabel(form, text="Document Title", font=ctk.CTkFont(size=10),
+                    text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 3))
+        self.title_entry = Entry(form, placeholder="e.g., Dev Server Credentials for John")
+        self.title_entry.pack(fill="x", pady=(0, 12))
+        self.title_entry.insert(0, f"Infrastructure Credentials - {datetime.now().strftime('%Y-%m-%d')}")
+
+        # PDF Password
+        ctk.CTkLabel(form, text="PDF Password (share this with recipient separately)",
+                    font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 3))
+        self.pw_entry = PwEntry(form, placeholder="Strong password for the PDF")
+        self.pw_entry.pack(fill="x", pady=(0, 8))
+
+        # Generate password button
+        ctk.CTkButton(form, text="Generate Strong Password", height=28, corner_radius=5,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     font=ctk.CTkFont(size=10), command=self._gen_password).pack(anchor="w", pady=(0, 12))
+
+        # Confirm password
+        ctk.CTkLabel(form, text="Confirm Password", font=ctk.CTkFont(size=10),
+                    text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 3))
+        self.pw_confirm = PwEntry(form, placeholder="Confirm password")
+        self.pw_confirm.pack(fill="x", pady=(0, 15))
+
+        # Error label
+        self.err_label = ctk.CTkLabel(form, text="", font=ctk.CTkFont(size=10), text_color=COLORS["danger"])
+        self.err_label.pack(fill="x", pady=(0, 10))
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=30, pady=(0, 20))
+
+        Btn(btn_frame, text="Cancel", primary=False, width=100, command=self.destroy).pack(side="left")
+        Btn(btn_frame, text="Export PDF", width=150, command=self._do_export).pack(side="right")
+
+    def _gen_password(self):
+        pw = generate_password(16, True, True, True, True)
+        self.pw_entry.delete(0, "end")
+        self.pw_entry.insert(0, pw)
+        self.pw_confirm.delete(0, "end")
+        self.pw_confirm.insert(0, pw)
+        # Show the password temporarily
+        self.pw_entry.show = True
+        self.pw_entry.e.configure(show="")
+        self.pw_entry.b.configure(text="Hide")
+        pyperclip.copy(pw)
+        self.err_label.configure(text="Password generated and copied to clipboard!", text_color=COLORS["success"])
+
+    def _do_export(self):
+        title = self.title_entry.get().strip()
+        password = self.pw_entry.get()
+        confirm = self.pw_confirm.get()
+
+        if not title:
+            self.err_label.configure(text="Please enter a document title", text_color=COLORS["danger"])
+            return
+        if not password:
+            self.err_label.configure(text="Please enter a password for the PDF", text_color=COLORS["danger"])
+            return
+        if len(password) < 8:
+            self.err_label.configure(text="Password must be at least 8 characters", text_color=COLORS["danger"])
+            return
+        if password != confirm:
+            self.err_label.configure(text="Passwords do not match", text_color=COLORS["danger"])
+            return
+
+        if not HAS_PDF:
+            self.err_label.configure(text="PDF export requires reportlab and PyPDF2 packages", text_color=COLORS["danger"])
+            return
+
+        # Get selected entries
+        entries = [e for e in self.vault.list_all() if e["id"] in self.selected_ids]
+
+        # Ask for save location
+        from tkinter import filedialog
+        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+        default_name = f"{safe_title}.pdf"
+
+        filepath = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+            initialfile=default_name,
+            title="Save Encrypted PDF"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            export_credentials_to_pdf(entries, self.vault, password, filepath, title)
+            self.result = filepath
+            self.destroy()
+        except Exception as e:
+            self.err_label.configure(text=f"Export failed: {str(e)}", text_color=COLORS["danger"])
+
+# ============================================================
 # APP
 # ============================================================
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} - DevOps Credentials")
+        self.title(f"{APP_NAME} - System Architect Credentials")
         self.geometry("980x680")
         self.minsize(880, 620)
         ctk.set_appearance_mode("dark")
@@ -680,8 +1107,10 @@ class App(ctk.CTk):
         self.tray = None
         self.popup = None
         self.queue = queue.Queue()
-        self.hotkey_on = False
+        self.hotkey_handler = None
         self.start_min = False
+        self.export_mode = False
+        self.selected_for_export: Set[str] = set()
 
         self._check_queue()
         self._show_login() if self.vault.exists() else self._show_setup()
@@ -709,15 +1138,20 @@ class App(ctk.CTk):
             pystray.Menu.SEPARATOR,
             TrayItem("Lock", self._tray_lock),
             TrayItem("Quit", self._tray_quit))
-        self.tray = pystray.Icon(APP_NAME, img, f"{APP_NAME}\nCtrl+Shift+V", menu)
+        self.tray = pystray.Icon(APP_NAME, img, f"{APP_NAME}\nShift+V, P", menu)
         threading.Thread(target=self.tray.run, daemon=True).start()
 
     def _setup_hotkey(self):
-        if self.hotkey_on: return
+        """Setup the Shift+V+P chord hotkey without key suppression."""
+        if self.hotkey_handler:
+            return
         try:
-            keyboard.add_hotkey(HOTKEY, lambda: self.queue.put("popup") if self.vault.unlocked else None, suppress=True)
-            self.hotkey_on = True
-        except: pass
+            self.hotkey_handler = ChordHotkeyHandler(
+                lambda: self.queue.put("popup") if self.vault.unlocked else None
+            )
+            self.hotkey_handler.start()
+        except Exception as e:
+            print(f"Hotkey setup failed: {e}")
 
     def _open_popup(self):
         if not self.vault.unlocked: return
@@ -732,7 +1166,7 @@ class App(ctk.CTk):
     def _tray_lock(self, *_): self.after(0, self._lock)
     def _tray_quit(self, *_):
         if self.tray: self.tray.stop()
-        if self.hotkey_on: keyboard.unhook_all()
+        if self.hotkey_handler: self.hotkey_handler.stop()
         self.quit()
 
     def _on_close(self):
@@ -749,7 +1183,7 @@ class App(ctk.CTk):
         c.place(relx=0.5, rely=0.5, anchor="center")
 
         ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
-        ctk.CTkLabel(c, text="DevOps Credential Manager", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(pady=(0, 32))
+        ctk.CTkLabel(c, text="System Architect Credential Manager", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(pady=(0, 32))
 
         f = ctk.CTkFrame(c, fg_color="transparent", width=360)
         f.pack()
@@ -874,12 +1308,13 @@ class App(ctk.CTk):
 
         hk = ctk.CTkFrame(sb, fg_color=COLORS["bg_tertiary"], corner_radius=5)
         hk.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(hk, text="Ctrl+Shift+V anywhere", font=ctk.CTkFont(size=9), text_color=COLORS["accent"]).pack(pady=5)
+        ctk.CTkLabel(hk, text="Shift+V, P anywhere", font=ctk.CTkFont(size=9), text_color=COLORS["accent"]).pack(pady=5)
 
         nav = ctk.CTkFrame(sb, fg_color="transparent")
         nav.pack(fill="x", padx=8, pady=4)
         for txt, cmd in [("All Credentials", self._view_all), ("Recent", self._view_recent),
-                         ("By Environment", self._view_env), ("Generate Password", self._view_gen), ("Settings", self._view_settings)]:
+                         ("By Environment", self._view_env), ("Export to PDF", self._view_export),
+                         ("Generate Password", self._view_gen), ("Settings", self._view_settings)]:
             ctk.CTkButton(nav, text=txt, height=32, corner_radius=6, fg_color="transparent", hover_color=COLORS["bg_tertiary"],
                          text_color=COLORS["text_primary"], anchor="w", font=ctk.CTkFont(size=12), command=cmd).pack(fill="x", pady=1)
 
@@ -902,6 +1337,7 @@ class App(ctk.CTk):
 
     # ===== VIEWS =====
     def _view_all(self):
+        self.export_mode = False
         for w in self.content.winfo_children(): w.destroy()
 
         hdr = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -938,12 +1374,27 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.lst, text="No credentials", font=ctk.CTkFont(size=12), text_color=COLORS["text_tertiary"]).pack(pady=30)
             return
         for e in items:
-            Card(self.lst, e, self._view_detail, self._quick_copy).pack(fill="x", pady=2)
+            if self.export_mode:
+                Card(self.lst, e, self._view_detail, self._quick_copy,
+                     selectable=True, selected=e["id"] in self.selected_for_export,
+                     on_select=self._toggle_export_selection).pack(fill="x", pady=2)
+            else:
+                Card(self.lst, e, self._view_detail, self._quick_copy).pack(fill="x", pady=2)
+
+    def _toggle_export_selection(self, eid: str, selected: bool):
+        if selected:
+            self.selected_for_export.add(eid)
+        else:
+            self.selected_for_export.discard(eid)
+        # Update export button text
+        if hasattr(self, 'export_btn'):
+            self.export_btn.configure(text=f"Export {len(self.selected_for_export)} Selected")
 
     def _quick_copy(self, e: dict):
         pyperclip.copy(self.vault.get_password(e["id"]))
 
     def _view_recent(self):
+        self.export_mode = False
         for w in self.content.winfo_children(): w.destroy()
         ctk.CTkLabel(self.content, text="Recently Used", font=ctk.CTkFont(size=20, weight="bold"),
                     text_color=COLORS["text_primary"]).pack(anchor="w", padx=20, pady=(20, 14))
@@ -957,6 +1408,7 @@ class App(ctk.CTk):
             Card(lst, e, self._view_detail, self._quick_copy).pack(fill="x", pady=2)
 
     def _view_env(self):
+        self.export_mode = False
         for w in self.content.winfo_children(): w.destroy()
         ctk.CTkLabel(self.content, text="By Environment", font=ctk.CTkFont(size=20, weight="bold"),
                     text_color=COLORS["text_primary"]).pack(anchor="w", padx=20, pady=(20, 14))
@@ -969,6 +1421,92 @@ class App(ctk.CTk):
             ctk.CTkLabel(lst, text=f"{env} ({len(items)})", font=ctk.CTkFont(size=13, weight="bold"), text_color=ec).pack(anchor="w", pady=(12, 6))
             for e in items:
                 Card(lst, e, self._view_detail, self._quick_copy).pack(fill="x", pady=2)
+
+    def _view_export(self):
+        """Export view - select credentials to export to PDF for junior devs."""
+        self.export_mode = True
+        self.selected_for_export.clear()
+
+        for w in self.content.winfo_children(): w.destroy()
+
+        hdr = ctk.CTkFrame(self.content, fg_color="transparent")
+        hdr.pack(fill="x", padx=20, pady=(20, 14))
+        ctk.CTkLabel(hdr, text="Export to PDF", font=ctk.CTkFont(size=20, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(side="left")
+
+        self.export_btn = Btn(hdr, text="Export 0 Selected", width=150, command=self._do_export)
+        self.export_btn.pack(side="right")
+        Btn(hdr, text="Cancel", primary=False, width=80, command=self._view_all).pack(side="right", padx=(0, 10))
+
+        # Instructions
+        ctk.CTkLabel(self.content, text="Select credentials to export as password-protected PDF for team members",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(anchor="w", padx=20, pady=(0, 12))
+
+        # Filter
+        flt = ctk.CTkFrame(self.content, fg_color="transparent")
+        flt.pack(fill="x", padx=20, pady=(0, 12))
+        self.search = Entry(flt, placeholder="Search...", textvariable=self.search_var, width=340)
+        self.search.pack(side="left")
+        self.env_flt = ctk.CTkComboBox(flt, values=["All"] + ENVIRONMENTS, width=120, height=38, corner_radius=6,
+                                       border_width=1, border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
+                                       dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11), command=lambda _: self._refresh_list())
+        self.env_flt.set("All")
+        self.env_flt.pack(side="left", padx=(8, 0))
+
+        # Select all button
+        Btn(flt, text="Select All", primary=False, width=80, command=self._select_all_for_export).pack(side="right")
+
+        self.lst = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
+        self.lst.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self._refresh_list()
+
+    def _select_all_for_export(self):
+        items = self.vault.list_all()
+        q = self.search_var.get().lower()
+        env = self.env_flt.get() if hasattr(self, "env_flt") else "All"
+        if q:
+            items = [e for e in items if q in e["name"].lower() or q in e.get("host", "").lower()]
+        if env != "All":
+            items = [e for e in items if e.get("environment") == env]
+        self.selected_for_export = {e["id"] for e in items}
+        self._refresh_list()
+        if hasattr(self, 'export_btn'):
+            self.export_btn.configure(text=f"Export {len(self.selected_for_export)} Selected")
+
+    def _do_export(self):
+        if not self.selected_for_export:
+            return
+        if not _load_pdf_modules():
+            # Show error dialog
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Missing Dependencies")
+            dialog.geometry("400x150")
+            dialog.transient(self)
+            dialog.grab_set()
+            dialog.configure(fg_color=COLORS["bg_primary"])
+            ctk.CTkLabel(dialog, text="PDF Export requires additional packages.\n\nPlease run:\npip install reportlab PyPDF2",
+                        font=ctk.CTkFont(size=12), text_color=COLORS["text_primary"]).pack(pady=30)
+            Btn(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            return
+
+        dialog = ExportDialog(self, self.vault, self.selected_for_export)
+        self.wait_window(dialog)
+        if dialog.result:
+            # Show success message
+            success_dialog = ctk.CTkToplevel(self)
+            success_dialog.title("Export Complete")
+            success_dialog.geometry("400x180")
+            success_dialog.transient(self)
+            success_dialog.grab_set()
+            success_dialog.configure(fg_color=COLORS["bg_primary"])
+
+            ctk.CTkLabel(success_dialog, text="PDF Exported Successfully!",
+                        font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["success"]).pack(pady=(20, 10))
+            ctk.CTkLabel(success_dialog, text=f"Saved to:\n{dialog.result}",
+                        font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 10))
+            ctk.CTkLabel(success_dialog, text="Share the PDF password with the recipient securely!",
+                        font=ctk.CTkFont(size=10), text_color=COLORS["warning"]).pack(pady=(0, 15))
+            Btn(success_dialog, text="OK", width=80, command=success_dialog.destroy).pack()
 
     def _view_detail(self, e: dict):
         for w in self.content.winfo_children(): w.destroy()
@@ -1099,7 +1637,7 @@ class App(ctk.CTk):
         self.a_proto.pack(fill="x")
         self.a_proto.set("SSH")
 
-        self._input(frm, "Tags (comma separated)", "a_tags", "linux, mysql, us-east")
+        self._input(frm, "Tags (comma separated)", "a_tags", "linux, mysql, us-east, team-backend")
 
         ctk.CTkLabel(frm, text="Notes", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
         self.a_notes = ctk.CTkTextbox(frm, height=60, corner_radius=6, border_width=1, border_color=COLORS["border"],
@@ -1299,10 +1837,11 @@ class App(ctk.CTk):
         cnt.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
         self._setting(cnt, "Start with Windows", "Launch minimized at login", in_startup(), self._tog_startup)
-        self._info(cnt, "Global Hotkey", "Ctrl+Shift+V anywhere")
+        self._info(cnt, "Global Hotkey", "Shift+V, P (chord - press Shift+V then P)")
         self._info(cnt, "Vault Location", str(get_vault_path()))
         self._info(cnt, "2FA", "Enabled" if self.vault.totp_enabled else "Disabled")
         self._info(cnt, "Encryption", f"AES-256-GCM + {'Argon2id' if HAS_ARGON2 else 'Scrypt'}")
+        self._info(cnt, "PDF Export", "Available" if _load_pdf_modules() else "Install: pip install reportlab PyPDF2")
 
         ctk.CTkLabel(cnt, text=f"SecureVault v{APP_VERSION}", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(pady=(14, 0))
 
@@ -1340,8 +1879,12 @@ def main():
     p.add_argument("--minimized", "-m", action="store_true")
     args = p.parse_args()
 
+    # Optimize pyautogui for faster typing
     pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0.01
+    pyautogui.PAUSE = 0.005  # Reduced pause for faster response
+
+    # Pre-warm the vault path cache
+    get_vault_dir()
 
     app = App()
     app.start_min = args.minimized

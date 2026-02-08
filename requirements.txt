@@ -16,11 +16,15 @@ pyperclip>=1.8.0
 # System tray
 pystray>=0.19.0
 
-# Global hotkey (Ctrl+Shift+V)
+# Global hotkey (Shift+V+P chord)
 keyboard>=0.13.5
 
 # Auto-type passwords
 pyautogui>=0.9.54
+
+# PDF export with encryption
+reportlab>=4.0.0
+PyPDF2>=3.0.0
 
 # Build tools
 pyinstaller>=6.0.0
