@@ -92,7 +92,7 @@ def _load_pdf_modules():
 # CONFIGURATION
 # ============================================================
 APP_NAME = "SecureVault"
-APP_VERSION = "3.1.0"  # Performance optimized
+APP_VERSION = "3.1.1"  # Better error messages
 VAULT_FILENAME = "vault.enc"
 STATS_FILENAME = "stats.enc"
 SALT_LENGTH = 32
@@ -523,13 +523,16 @@ class Vault:
         self._save()
         return self.totp_secret
 
-    def unlock(self, password: str) -> bool:
+    def unlock(self, password: str) -> Tuple[bool, str]:
+        """Unlock vault. Returns (success, error_message)."""
         try:
+            if not self.path.exists():
+                return False, "Vault file not found"
             data = json.loads(self.path.read_bytes())
             self.salt = base64.b64decode(data["salt"])
             self.verify_hash = data["master_verify"]
             if not verify_master_password(password, self.salt, self.verify_hash):
-                return False
+                return False, "Wrong password"
             self.key = derive_key(password, self.salt)
             self.entries = json.loads(decrypt_data(base64.b64decode(data["entries_enc"]), self.key).decode("utf-8"))
             if data.get("totp_enc"):
@@ -540,8 +543,13 @@ class Vault:
             self.unlocked = True
             self._invalidate_cache()
             self.stats.set_key(self.key)
-            return True
-        except: return False
+            return True, ""
+        except json.JSONDecodeError:
+            return False, "Vault file corrupted"
+        except KeyError as e:
+            return False, f"Invalid vault format: missing {e}"
+        except Exception as e:
+            return False, f"Unlock failed: {str(e)[:50]}"
 
     def verify_totp(self, code: str) -> bool:
         if not self.totp_enabled: return True
@@ -1275,10 +1283,60 @@ class App(ctk.CTk):
         self.l_err.pack(fill="x", pady=(0, 6))
 
         Btn(f, text="Unlock", width=360, command=self._do_login).pack(fill="x")
+
+        # Reset option if user forgot password
+        ctk.CTkButton(f, text="Forgot password? Reset vault", width=360, height=28,
+                     fg_color="transparent", hover_color=COLORS["bg_tertiary"],
+                     text_color=COLORS["text_tertiary"], font=ctk.CTkFont(size=10),
+                     command=self._confirm_reset).pack(fill="x", pady=(12, 0))
         self.bind("<Return>", lambda _: self._do_login())
 
+    def _confirm_reset(self):
+        """Show confirmation dialog to reset vault."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Reset Vault")
+        dialog.geometry("400x200")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=COLORS["bg_primary"])
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        dialog.geometry(f"400x200+{x}+{y}")
+
+        ctk.CTkLabel(dialog, text="Reset Vault?", font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS["danger"]).pack(pady=(20, 10))
+        ctk.CTkLabel(dialog, text="This will DELETE all saved credentials!\nThis action cannot be undone.",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 20))
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=30)
+        Btn(btn_frame, text="Cancel", primary=False, width=120, command=dialog.destroy).pack(side="left")
+        Btn(btn_frame, text="Delete & Reset", danger=True, width=120,
+            command=lambda: self._do_reset(dialog)).pack(side="right")
+
+    def _do_reset(self, dialog):
+        """Delete vault and show setup screen."""
+        dialog.destroy()
+        try:
+            vault_path = get_vault_path()
+            stats_path = get_stats_path()
+            if vault_path.exists():
+                vault_path.unlink()
+            if stats_path.exists():
+                stats_path.unlink()
+        except Exception as e:
+            self.l_err.configure(text=f"Reset failed: {e}")
+            return
+        self.vault = Vault()
+        self._show_setup()
+
     def _do_login(self):
-        if not self.vault.unlock(self.l_pw.get()): self.l_err.configure(text="Wrong password"); return
+        success, error = self.vault.unlock(self.l_pw.get())
+        if not success:
+            self.l_err.configure(text=error)
+            return
         if self.need_2fa and not self.vault.verify_totp(self.l_code.get().strip()):
             self.vault.lock()
             self.l_err.configure(text="Invalid 2FA code")
