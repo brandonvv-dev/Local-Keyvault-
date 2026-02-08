@@ -833,7 +833,7 @@ class QuickPopup(ctk.CTkToplevel):
 
     def _card(self, e: dict, i: int):
         sel = i == self.sel
-        fr = ctk.CTkFrame(self.lst, fg_color=COLORS["accent"] if sel else COLORS["bg_secondary"], corner_radius=6, height=54)
+        fr = ctk.CTkFrame(self.lst, fg_color=COLORS["accent"] if sel else COLORS["bg_secondary"], corner_radius=6, height=58)
         fr.pack(fill="x", pady=2)
         fr.pack_propagate(False)
         fr.bind("<Button-1>", lambda _, idx=i: self._sel_copy(idx))
@@ -842,21 +842,28 @@ class QuickPopup(ctk.CTkToplevel):
         ec = COLORS["prod"] if env == "Production" else COLORS["staging"] if env == "Staging" else COLORS["dev"] if env == "Development" else COLORS["border"]
         ctk.CTkFrame(fr, width=4, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
 
+        # Pack buttons FIRST (on right) so they get space
+        btns = ctk.CTkFrame(fr, fg_color="transparent", width=110)
+        btns.pack(side="right", padx=(0, 8), pady=8)
+        btns.pack_propagate(False)
+        ctk.CTkButton(btns, text="Copy", width=48, height=28, corner_radius=4,
+                     fg_color=COLORS["bg_tertiary"] if not sel else COLORS["bg_secondary"],
+                     hover_color=COLORS["border"], font=ctk.CTkFont(size=10),
+                     command=lambda idx=i: self._sel_copy(idx)).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(btns, text="Type", width=48, height=28, corner_radius=4,
+                     fg_color=COLORS["bg_tertiary"] if not sel else COLORS["bg_secondary"],
+                     hover_color=COLORS["border"], font=ctk.CTkFont(size=10),
+                     command=lambda idx=i: self._sel_type(idx)).pack(side="left")
+
+        # Content in the middle
         cnt = ctk.CTkFrame(fr, fg_color="transparent")
-        cnt.pack(fill="both", expand=True, padx=10, pady=6)
+        cnt.pack(side="left", fill="both", expand=True, padx=10, pady=6)
         cnt.bind("<Button-1>", lambda _, idx=i: self._sel_copy(idx))
 
         ctk.CTkLabel(cnt, text=e["name"], font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
         info = " @ ".join(filter(None, [e.get("username"), (e.get("host", "") + (f":{e['port']}" if e.get("port") else ""))]))
         ctk.CTkLabel(cnt, text=info or e.get("type", ""), font=ctk.CTkFont(size=10, family="Consolas"),
                     text_color=COLORS["text_primary"] if sel else COLORS["text_secondary"], anchor="w").pack(fill="x")
-
-        btns = ctk.CTkFrame(fr, fg_color="transparent")
-        btns.pack(side="right", padx=6)
-        ctk.CTkButton(btns, text="Copy", width=42, height=24, corner_radius=4, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=10), command=lambda idx=i: self._sel_copy(idx)).pack(side="left", padx=2)
-        ctk.CTkButton(btns, text="Type", width=42, height=24, corner_radius=4, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=10), command=lambda idx=i: self._sel_type(idx)).pack(side="left", padx=2)
 
     def _move(self, d: int):
         if self.items:
@@ -979,7 +986,7 @@ class ExportDialog(ctk.CTkToplevel):
         self.result = None
 
         self.title("Export Credentials to PDF")
-        self.geometry("450x350")
+        self.geometry("480x450")
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
@@ -988,9 +995,9 @@ class ExportDialog(ctk.CTkToplevel):
 
         # Center on parent
         self.update_idletasks()
-        x = master.winfo_x() + (master.winfo_width() - 450) // 2
-        y = master.winfo_y() + (master.winfo_height() - 350) // 2
-        self.geometry(f"450x350+{x}+{y}")
+        x = master.winfo_x() + (master.winfo_width() - 480) // 2
+        y = master.winfo_y() + (master.winfo_height() - 450) // 2
+        self.geometry(f"480x450+{x}+{y}")
 
         # Content
         ctk.CTkLabel(self, text="Export for Team Member", font=ctk.CTkFont(size=18, weight="bold"),
