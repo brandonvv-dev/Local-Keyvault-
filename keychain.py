@@ -721,8 +721,12 @@ def export_credentials_to_pdf(entries: List[dict], vault, pdf_password: str, out
         for page in reader.pages:
             writer.add_page(page)
 
-        # Encrypt with AES-256
-        writer.encrypt(pdf_password, pdf_password, algorithm="AES-256")
+        # Encrypt with password (use AES-256 if supported, fallback to default)
+        try:
+            writer.encrypt(pdf_password, pdf_password, algorithm="AES-256")
+        except TypeError:
+            # Older PyPDF2 versions don't support algorithm parameter
+            writer.encrypt(pdf_password, pdf_password)
 
         # Write encrypted PDF
         with open(output_path, 'wb') as output_file:
@@ -1427,7 +1431,7 @@ class ExportDialog(ctk.CTkToplevel):
         self.result = None
 
         self.title("Export Credentials to PDF")
-        self.geometry("500x480")
+        self.geometry("500x550")
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
@@ -1437,8 +1441,8 @@ class ExportDialog(ctk.CTkToplevel):
         # Center on parent
         self.update_idletasks()
         x = master.winfo_x() + (master.winfo_width() - 500) // 2
-        y = master.winfo_y() + (master.winfo_height() - 480) // 2
-        self.geometry(f"500x480+{x}+{y}")
+        y = master.winfo_y() + (master.winfo_height() - 550) // 2
+        self.geometry(f"500x550+{x}+{y}")
 
         # Content
         ctk.CTkLabel(self, text="Export for Team Member", font=ctk.CTkFont(size=18, weight="bold"),
@@ -2056,14 +2060,23 @@ class App(ctk.CTk):
 
         for w in self.content.winfo_children(): w.destroy()
 
-        hdr = ctk.CTkFrame(self.content, fg_color="transparent")
+        hdr = ctk.CTkFrame(self.content, fg_color="transparent", height=50)
         hdr.pack(fill="x", padx=20, pady=(20, 14))
-        ctk.CTkLabel(hdr, text="Export to PDF", font=ctk.CTkFont(size=20, weight="bold"),
-                    text_color=COLORS["text_primary"]).pack(side="left")
+        hdr.pack_propagate(False)
 
-        self.export_btn = Btn(hdr, text="Export 0 Selected", width=150, command=self._do_export)
-        self.export_btn.pack(side="right")
-        Btn(hdr, text="Cancel", primary=False, width=80, command=self._view_all).pack(side="right", padx=(0, 10))
+        ctk.CTkLabel(hdr, text="Export to PDF", font=ctk.CTkFont(size=20, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(side="left", pady=8)
+
+        # Buttons frame on right side
+        btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        btn_row.pack(side="right", pady=4)
+
+        self.export_btn = ctk.CTkButton(btn_row, text="Export 0 Selected", width=180, height=40, corner_radius=8,
+                                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                        text_color=COLORS["text_primary"], font=ctk.CTkFont(size=13, weight="bold"),
+                                        command=self._do_export)
+        self.export_btn.pack(side="left", padx=(0, 10))
+        Btn(btn_row, text="Cancel", primary=False, width=80, command=self._view_all).pack(side="left")
 
         # Instructions
         ctk.CTkLabel(self.content, text="Select credentials to export as password-protected PDF for team members",
@@ -2599,11 +2612,11 @@ class App(ctk.CTk):
         self.len_lbl.pack(side="right")
         ctk.CTkLabel(lr, text="128", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(side="right", padx=(0, 4))
         self.len_sl = ctk.CTkSlider(lr, from_=4, to=128, number_of_steps=124, command=self._on_len,
-                                    height=16, corner_radius=8,
+                                    width=200, height=16, corner_radius=8,
                                     fg_color=COLORS["bg_tertiary"], progress_color=COLORS["accent"],
                                     button_color=COLORS["accent"], button_hover_color=COLORS["accent_hover"])
         self.len_sl.set(24)
-        self.len_sl.pack(side="right", fill="x", expand=True, padx=12)
+        self.len_sl.pack(side="right", padx=12)
         ctk.CTkLabel(lr, text="4", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(side="right")
 
         # Character type toggles - modern switches
@@ -2628,7 +2641,9 @@ class App(ctk.CTk):
         self._upd_str()
 
     def _on_len(self, v):
-        self.len_lbl.configure(text=str(int(v)))
+        # Clamp value to valid range
+        clamped = max(MIN_PASSWORD_LENGTH, min(int(v), MAX_PASSWORD_LENGTH))
+        self.len_lbl.configure(text=str(clamped))
         self._regen()
 
     def _regen(self):
