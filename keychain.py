@@ -385,7 +385,14 @@ def generate_password(length: int = DEFAULT_PASSWORD_LENGTH, use_upper: bool = T
     if use_upper: pools.append("ABCDEFGHJKLMNPQRSTUVWXYZ")
     if use_lower: pools.append("abcdefghjkmnpqrstuvwxyz")
     if use_digits: pools.append("23456789")
-    if use_symbols: pools.append("!@#$%^&*-_=+")
+    if use_symbols:
+        symbols = "!@#$%^&*-_=+"
+        try:
+            if get_settings().get("exclude_dollar", False):
+                symbols = symbols.replace("$", "")
+        except Exception:
+            pass
+        pools.append(symbols)
     if not pools: pools.append("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789")
     chars = [secrets.choice(p) for p in pools]
     all_chars = "".join(pools)
@@ -1223,11 +1230,14 @@ class QuickPopup(ctk.CTkToplevel):
             self._card(e, i)
 
     def _card(self, e: dict, i: int):
-        sel = i == self.sel
-        fr = ctk.CTkFrame(self.lst, fg_color=COLORS["accent"] if sel else COLORS["bg_secondary"], corner_radius=8, height=44)
+        hover_color = "#1D3A5C"
+        default_color = COLORS["bg_secondary"]
+        fr = ctk.CTkFrame(self.lst, fg_color=default_color, corner_radius=8, height=44)
         fr.pack(fill="x", pady=1)
         fr.pack_propagate(False)
         fr.bind("<Button-1>", lambda _, idx=i: self._sel_copy(idx))
+        fr.bind("<Enter>", lambda _: fr.configure(fg_color=hover_color))
+        fr.bind("<Leave>", lambda _: fr.configure(fg_color=default_color))
 
         env = e.get("environment", "")
         ec = COLORS["prod"] if env == "Production" else COLORS["staging"] if env == "Staging" else COLORS["dev"] if env == "Development" else COLORS["border"]
@@ -1240,11 +1250,11 @@ class QuickPopup(ctk.CTkToplevel):
 
         # Buttons on right
         ctk.CTkButton(fr, text="Type", width=40, height=24, corner_radius=6,
-                     fg_color=COLORS["bg_tertiary"] if not sel else COLORS["bg_secondary"],
+                     fg_color=COLORS["bg_tertiary"],
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
                      command=lambda idx=i: self._sel_type(idx)).pack(side="right", padx=(2, 6))
         ctk.CTkButton(fr, text="Copy", width=40, height=24, corner_radius=6,
-                     fg_color=COLORS["bg_tertiary"] if not sel else COLORS["bg_secondary"],
+                     fg_color=COLORS["bg_tertiary"],
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
                      command=lambda idx=i: self._sel_copy(idx)).pack(side="right")
 
@@ -1257,7 +1267,7 @@ class QuickPopup(ctk.CTkToplevel):
                     text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
         info = e.get("username", "") or e.get("host", "") or ctype.split(" - ")[-1].split(" ")[0]
         ctk.CTkLabel(cnt, text=info[:30], font=ctk.CTkFont(size=8),
-                    text_color=COLORS["text_primary"] if sel else COLORS["text_tertiary"], anchor="w").pack(fill="x")
+                    text_color=COLORS["text_tertiary"], anchor="w").pack(fill="x")
 
     def _move(self, d: int):
         if self.items:
@@ -1689,7 +1699,21 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
+        logo_path = Path(__file__).parent / "logo.png"
+        if logo_path.exists():
+            setup_logo = Image.open(logo_path).convert("RGBA")
+            datas = setup_logo.getdata()
+            new_data = []
+            for item in datas:
+                if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                    new_data.append((0, 0, 0, 0))
+                else:
+                    new_data.append(item)
+            setup_logo.putdata(new_data)
+            self._setup_logo = ctk.CTkImage(setup_logo, size=(200, 175))
+            ctk.CTkLabel(c, image=self._setup_logo, text="").pack(pady=(0, 4))
+        else:
+            ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
         ctk.CTkLabel(c, text="System Architect Credential Manager", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(pady=(0, 32))
 
         f = ctk.CTkFrame(c, fg_color="transparent", width=360)
@@ -1762,7 +1786,21 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
+        logo_path = Path(__file__).parent / "logo.png"
+        if logo_path.exists():
+            login_logo = Image.open(logo_path).convert("RGBA")
+            datas = login_logo.getdata()
+            new_data = []
+            for item in datas:
+                if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                    new_data.append((0, 0, 0, 0))
+                else:
+                    new_data.append(item)
+            login_logo.putdata(new_data)
+            self._login_logo = ctk.CTkImage(login_logo, size=(200, 175))
+            ctk.CTkLabel(c, image=self._login_logo, text="").pack(pady=(0, 4))
+        else:
+            ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
         ctk.CTkLabel(c, text="Unlock your vault", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(pady=(0, 32))
 
         f = ctk.CTkFrame(c, fg_color="transparent", width=360)
@@ -1860,12 +1898,26 @@ class App(ctk.CTk):
 
         hdr = ctk.CTkFrame(sb, fg_color="transparent")
         hdr.pack(fill="x", padx=14, pady=14)
-        ctk.CTkLabel(hdr, text="SecureVault", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text_primary"]).pack(anchor="w")
+        logo_path = Path(__file__).parent / "logo.png"
+        if logo_path.exists():
+            logo_img = Image.open(logo_path).convert("RGBA")
+            datas = logo_img.getdata()
+            new_data = []
+            for item in datas:
+                if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                    new_data.append((item[0], item[1], item[2], 0))
+                else:
+                    new_data.append(item)
+            logo_img.putdata(new_data)
+            self._sidebar_logo = ctk.CTkImage(logo_img, size=(160, 140))
+            ctk.CTkLabel(hdr, image=self._sidebar_logo, text="").pack(anchor="w", pady=(0, 4))
+        else:
+            ctk.CTkLabel(hdr, text="SecureVault", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text_primary"]).pack(anchor="w")
         ctk.CTkLabel(hdr, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(anchor="w")
 
         hk = ctk.CTkFrame(sb, fg_color=COLORS["bg_tertiary"], corner_radius=5)
         hk.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(hk, text="Shift+V, P anywhere", font=ctk.CTkFont(size=9), text_color=COLORS["accent"]).pack(pady=5)
+        ctk.CTkLabel(hk, text="Shift+V, P anywhere", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["accent"]).pack(pady=5)
 
         nav = ctk.CTkFrame(sb, fg_color="transparent")
         nav.pack(fill="x", padx=8, pady=4)
@@ -1940,8 +1992,26 @@ class App(ctk.CTk):
                      hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
                      command=self._toggle_favorites_filter).pack(side="right")
 
-        self.lst = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
-        self.lst.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        # Wrapper for list + watermark logo
+        list_wrapper = ctk.CTkFrame(self.content, fg_color="transparent")
+        list_wrapper.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        logo_path = Path(__file__).parent / "logo.png"
+        if logo_path.exists():
+            wm_img = Image.open(logo_path).convert("RGBA")
+            datas = wm_img.getdata()
+            new_data = []
+            for item in datas:
+                if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                    new_data.append((0, 0, 0, 0))
+                else:
+                    new_data.append((item[0], item[1], item[2], int(item[3] * 0.07)))
+            wm_img.putdata(new_data)
+            self._home_watermark = ctk.CTkImage(wm_img, size=(300, 260))
+            ctk.CTkLabel(list_wrapper, image=self._home_watermark, text="").place(relx=0.5, rely=0.5, anchor="center")
+
+        self.lst = ctk.CTkScrollableFrame(list_wrapper, fg_color="transparent")
+        self.lst.pack(fill="both", expand=True)
         self._refresh_list()
 
     def _on_sort_change(self, value):
@@ -2326,7 +2396,7 @@ class App(ctk.CTk):
 
         self._input(frm, "Name / Label", "a_name", "Production DB, AWS Root, etc.")
 
-        ctk.CTkLabel(frm, text="Type", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
+        ctk.CTkLabel(frm, text="Type", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(9, 2))
         self.a_type = ctk.CTkComboBox(frm, values=CREDENTIAL_TYPES, height=38, corner_radius=6, border_width=1,
                                       border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
                                       dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11))
@@ -2335,7 +2405,7 @@ class App(ctk.CTk):
 
         # Host and Port row - labels first
         lbl_row = ctk.CTkFrame(frm, fg_color="transparent")
-        lbl_row.pack(fill="x", pady=(10, 3))
+        lbl_row.pack(fill="x", pady=(9, 2))
         ctk.CTkLabel(lbl_row, text="Host / IP", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(lbl_row, text="Port", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w", width=90).pack(side="right", padx=(8, 0))
 
@@ -2349,20 +2419,30 @@ class App(ctk.CTk):
 
         self._input(frm, "Username / Access Key", "a_user", "root, admin, AKIA...")
 
-        ctk.CTkLabel(frm, text="Password / Secret", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
+        ctk.CTkLabel(frm, text="Password / Secret", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(9, 2))
         prow = ctk.CTkFrame(frm, fg_color="transparent")
         prow.pack(fill="x")
         self.a_pw = PwEntry(prow)
         self.a_pw.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(prow, text="Generate", width=75, height=38, corner_radius=6, fg_color=COLORS["accent"],
                      hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=10),
-                     command=lambda: (self.a_pw.delete(0, "end"), self.a_pw.insert(0, generate_password()))).pack(side="right", padx=(5, 0))
+                     command=lambda: (self.a_pw.delete(0, "end"), self.a_pw.insert(0, generate_password()))).pack(side="right", padx=(4, 0))
+        def _copy_add_pw():
+            val = self.a_pw.get()
+            if val:
+                ClipboardManager.copy(val)
+                _copy_btn_a.configure(text="Copied!")
+                self.after(1000, lambda: _copy_btn_a.configure(text="Copy"))
+        _copy_btn_a = ctk.CTkButton(prow, text="Copy", width=55, height=38, corner_radius=6,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     font=ctk.CTkFont(size=10), command=_copy_add_pw)
+        _copy_btn_a.pack(side="right", padx=(4, 0))
 
         row2 = ctk.CTkFrame(frm, fg_color="transparent")
-        row2.pack(fill="x", pady=(10, 0))
+        row2.pack(fill="x", pady=(9, 0))
         ef = ctk.CTkFrame(row2, fg_color="transparent")
         ef.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(ef, text="Environment", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 3))
+        ctk.CTkLabel(ef, text="Environment", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 2))
         self.a_env = ctk.CTkComboBox(ef, values=ENVIRONMENTS, height=38, corner_radius=6, border_width=1,
                                      border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
                                      dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11))
@@ -2370,7 +2450,7 @@ class App(ctk.CTk):
         self.a_env.set("Development")
         prf = ctk.CTkFrame(row2, fg_color="transparent")
         prf.pack(side="right", fill="x", expand=True, padx=(8, 0))
-        ctk.CTkLabel(prf, text="Protocol", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 3))
+        ctk.CTkLabel(prf, text="Protocol", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(0, 2))
         self.a_proto = ctk.CTkComboBox(prf, values=PROTOCOLS, height=38, corner_radius=6, border_width=1,
                                        border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
                                        dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11))
@@ -2379,30 +2459,46 @@ class App(ctk.CTk):
 
         self._input(frm, "Tags (comma separated)", "a_tags", "linux, mysql, us-east, team-backend")
 
-        # SSH Key (collapsible)
-        ssh_frame = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
-        ssh_frame.pack(fill="x", pady=(10, 0))
-        ssh_header = ctk.CTkFrame(ssh_frame, fg_color="transparent")
-        ssh_header.pack(fill="x", padx=10, pady=8)
-        ctk.CTkLabel(ssh_header, text="🔑 SSH Private Key (optional)", font=ctk.CTkFont(size=10, weight="bold"),
-                    text_color=COLORS["text_secondary"]).pack(side="left")
-        self.a_ssh_key = ctk.CTkTextbox(ssh_frame, height=80, corner_radius=6, border_width=1, border_color=COLORS["border"],
-                                        fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
-                                        font=ctk.CTkFont(size=10, family="Consolas"))
-        self.a_ssh_key.pack(fill="x", padx=10, pady=(0, 10))
+        # Checkboxes row - SSH Key and Notes side by side
+        self._a_ssh_visible = ctk.BooleanVar(value=False)
+        self._a_notes_visible = ctk.BooleanVar(value=False)
+        cb_row = ctk.CTkFrame(frm, fg_color="transparent")
+        cb_row.pack(fill="x", pady=(9, 0))
+        ctk.CTkCheckBox(cb_row, text="Include SSH Private Key",
+                        variable=self._a_ssh_visible,
+                        command=lambda: self._toggle_ssh(self._a_ssh_visible, self._a_ssh_inner),
+                        font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_secondary"],
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                        border_color=COLORS["border"], checkmark_color=COLORS["text_primary"]).pack(side="left")
+        ctk.CTkCheckBox(cb_row, text="Include Notes",
+                        variable=self._a_notes_visible,
+                        command=lambda: self._toggle_ssh(self._a_notes_visible, self._a_notes_inner),
+                        font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_secondary"],
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                        border_color=COLORS["border"], checkmark_color=COLORS["text_primary"]).pack(side="left", padx=(14, 0))
 
-        ctk.CTkLabel(frm, text="Notes", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
-        self.a_notes = ctk.CTkTextbox(frm, height=60, corner_radius=6, border_width=1, border_color=COLORS["border"],
-                                      fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11))
-        self.a_notes.pack(fill="x")
+        # SSH Key expandable
+        self._a_ssh_inner = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        self.a_ssh_key = ctk.CTkTextbox(self._a_ssh_inner, height=80, corner_radius=6, border_width=1,
+                                        border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
+                                        text_color=COLORS["text_primary"],
+                                        font=ctk.CTkFont(size=10, family="Consolas"))
+        self.a_ssh_key.pack(fill="x", padx=10, pady=9)
+
+        # Notes expandable
+        self._a_notes_inner = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        self.a_notes = ctk.CTkTextbox(self._a_notes_inner, height=60, corner_radius=6, border_width=1,
+                                      border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
+                                      text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11))
+        self.a_notes.pack(fill="x", padx=10, pady=9)
 
         self.a_err = ctk.CTkLabel(frm, text="", font=ctk.CTkFont(size=10), text_color=COLORS["danger"])
-        self.a_err.pack(fill="x", pady=(10, 0))
+        self.a_err.pack(fill="x", pady=(6, 0))
 
-        Btn(frm, text="Save", command=self._do_add).pack(fill="x", pady=(10, 20))
+        Btn(frm, text="Save", command=self._do_add).pack(fill="x", pady=(6, 16))
 
     def _input(self, parent, label: str, attr: str, placeholder: str):
-        ctk.CTkLabel(parent, text=label, font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
+        ctk.CTkLabel(parent, text=label, font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(9, 2))
         e = Entry(parent, placeholder=placeholder)
         e.pack(fill="x")
         setattr(self, attr, e)
@@ -2417,6 +2513,12 @@ class App(ctk.CTk):
                       self.a_user.get().strip(), pw, self.a_env.get(), self.a_proto.get(),
                       self.a_tags.get().strip(), self.a_notes.get("1.0", "end").strip(), ssh_key)
         self._view_all()
+
+    def _toggle_ssh(self, var: ctk.BooleanVar, inner_frame: ctk.CTkFrame):
+        if var.get():
+            inner_frame.pack(fill="x", pady=(4, 0))
+        else:
+            inner_frame.pack_forget()
 
     # ===== EDIT =====
     def _view_edit(self, e: dict):
@@ -2445,7 +2547,7 @@ class App(ctk.CTk):
 
         # Host and Port row - labels first
         lbl_row = ctk.CTkFrame(frm, fg_color="transparent")
-        lbl_row.pack(fill="x", pady=(10, 3))
+        lbl_row.pack(fill="x", pady=(9, 2))
         ctk.CTkLabel(lbl_row, text="Host / IP", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(lbl_row, text="Port", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w", width=90).pack(side="right", padx=(8, 0))
 
@@ -2492,21 +2594,26 @@ class App(ctk.CTk):
 
         self._edit_input(frm, "Tags", "e_tags", e.get("tags", ""))
 
-        # SSH Key
-        ssh_frame = ctk.CTkFrame(frm, fg_color=COLORS["bg_secondary"], corner_radius=8)
-        ssh_frame.pack(fill="x", pady=(10, 0))
-        ssh_header = ctk.CTkFrame(ssh_frame, fg_color="transparent")
-        ssh_header.pack(fill="x", padx=10, pady=8)
-        ctk.CTkLabel(ssh_header, text="🔑 SSH Private Key (optional)", font=ctk.CTkFont(size=10, weight="bold"),
-                    text_color=COLORS["text_secondary"]).pack(side="left")
-        self.e_ssh_key = ctk.CTkTextbox(ssh_frame, height=80, corner_radius=6, border_width=1, border_color=COLORS["border"],
-                                        fg_color=COLORS["bg_tertiary"], text_color=COLORS["text_primary"],
-                                        font=ctk.CTkFont(size=10, family="Consolas"))
-        self.e_ssh_key.pack(fill="x", padx=10, pady=(0, 10))
-        # Load existing SSH key
+        # SSH Key (collapsible checkbox toggle)
         existing_ssh = self.vault.get_ssh_key(e["id"])
+        self._e_ssh_visible = ctk.BooleanVar(value=bool(existing_ssh))
+        ssh_wrapper = ctk.CTkFrame(frm, fg_color="transparent")
+        ssh_wrapper.pack(fill="x", pady=(10, 0))
+        ctk.CTkCheckBox(ssh_wrapper, text="Include SSH Private Key",
+                        variable=self._e_ssh_visible,
+                        command=lambda: self._toggle_ssh(self._e_ssh_visible, self._e_ssh_inner),
+                        font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_secondary"],
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                        border_color=COLORS["border"], checkmark_color=COLORS["text_primary"]).pack(anchor="w")
+        self._e_ssh_inner = ctk.CTkFrame(ssh_wrapper, fg_color=COLORS["bg_secondary"], corner_radius=8)
+        self.e_ssh_key = ctk.CTkTextbox(self._e_ssh_inner, height=80, corner_radius=6, border_width=1,
+                                        border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
+                                        text_color=COLORS["text_primary"],
+                                        font=ctk.CTkFont(size=10, family="Consolas"))
+        self.e_ssh_key.pack(fill="x", padx=10, pady=10)
         if existing_ssh:
             self.e_ssh_key.insert("1.0", existing_ssh)
+            self._e_ssh_inner.pack(fill="x", pady=(4, 0))
 
         ctk.CTkLabel(frm, text="Notes", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(10, 3))
         self.e_notes = ctk.CTkTextbox(frm, height=60, corner_radius=6, border_width=1, border_color=COLORS["border"],
@@ -2592,6 +2699,10 @@ class App(ctk.CTk):
         ctk.CTkButton(br, text="Copy to Clipboard", width=140, height=40, corner_radius=10,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
                      font=ctk.CTkFont(size=12), command=lambda: ClipboardManager.copy(self.gen_var.get())).pack(side="left")
+        ctk.CTkButton(br, text="Save as Credential", width=150, height=40, corner_radius=10,
+                     fg_color="#1A5276", hover_color="#1D6FA5",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     command=self._save_gen_as_credential).pack(side="left", padx=(8, 0))
 
         # Options section - modern card
         opt_card = ctk.CTkFrame(cnt, fg_color=COLORS["bg_secondary"], corner_radius=12)
@@ -2658,6 +2769,13 @@ class App(ctk.CTk):
         self.str_bar.configure(progress_color=color)
         self.str_bar.set(score / 100)
 
+    def _save_gen_as_credential(self):
+        pw = self.gen_var.get()
+        self._view_add()
+        if hasattr(self, 'a_pw') and pw:
+            self.a_pw.delete(0, "end")
+            self.a_pw.insert(0, pw)
+
     # ===== SETTINGS =====
     def _view_settings(self):
         for w in self.content.winfo_children(): w.destroy()
@@ -2683,6 +2801,10 @@ class App(ctk.CTk):
                                ["1 min", "5 min", "10 min", "30 min", "Never"],
                                f"{clear_mins} min" if clear_mins > 0 else "Never",
                                self._change_clipboard_clear)
+
+        # Exclude $ from passwords
+        self._setting(cnt, "Exclude $ from Passwords", "Never include the $ character in generated passwords",
+                      settings.get("exclude_dollar", False), self._tog_exclude_dollar)
 
         # Hotkey configuration
         hotkey_first = settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
@@ -2851,6 +2973,11 @@ class App(ctk.CTk):
         v = getattr(self, "set_start_with_windows", None)
         if v and v.get(): add_startup()
         else: remove_startup()
+
+    def _tog_exclude_dollar(self):
+        v = getattr(self, "set_exclude_$_from_passwords", None)
+        if v is not None:
+            get_settings().set("exclude_dollar", v.get())
 
 # ============================================================
 # MAIN
