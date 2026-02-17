@@ -749,6 +749,139 @@ def export_credentials_to_pdf(entries: List[dict], vault, pdf_password: str, out
             pass
 
 # ============================================================
+# PDF IMPORT (Password Protected - Lazy Loaded)
+# ============================================================
+def import_credentials_from_pdf(pdf_path: str, pdf_password: str) -> List[dict]:
+    """
+    Import credentials from a password-protected PDF previously exported by SecureVault.
+    Parses the known export format and returns a list of credential dicts.
+
+    Returns list of dicts with keys:
+        name, type, host, port, username, password, environment, protocol, tags, notes
+    """
+    if not _load_pdf_modules():
+        raise RuntimeError("PDF import requires 'PyPDF2' package.\n"
+                          "Install with: pip install PyPDF2")
+
+    PdfReader = _pdf_modules['PdfReader']
+
+    import re
+
+    reader = PdfReader(pdf_path)
+
+    # Decrypt the PDF
+    if reader.is_encrypted:
+        result = reader.decrypt(pdf_password)
+        # PyPDF2 returns 0 for failed decrypt, 1 or 2 for success
+        if result == 0:
+            raise ValueError("Incorrect PDF password")
+
+    # Extract text from all pages, concatenated
+    full_text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            full_text += page_text + "\n"
+
+    if not full_text.strip():
+        raise ValueError("Could not extract text from PDF. The file may be empty or corrupt.")
+
+    credentials = []
+
+    # Split into credential blocks using the numbered header pattern:
+    # "1. CredentialName [Environment]" or "1. CredentialName"
+    # The pattern accounts for PyPDF2 text extraction quirks
+    entry_pattern = re.compile(
+        r'(\d+)\.\s+(.+?)(?:\s*\[([^\]]*)\])?\s*\n',
+        re.MULTILINE
+    )
+
+    matches = list(entry_pattern.finditer(full_text))
+
+    if not matches:
+        raise ValueError("No credentials found in PDF. The file may not be a SecureVault export.")
+
+    for idx, match in enumerate(matches):
+        # Determine the text block for this credential
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(full_text)
+        block = full_text[start:end]
+
+        cred_name = match.group(2).strip()
+        cred_env = match.group(3).strip() if match.group(3) else ""
+
+        cred = {
+            "name": cred_name,
+            "type": "",
+            "host": "",
+            "port": "",
+            "username": "",
+            "password": "",
+            "environment": cred_env,
+            "protocol": "",
+            "tags": "",
+            "notes": "",
+        }
+
+        # Parse label:value pairs from the block
+        # The PDF export uses "Label:" followed by value, one per line
+        # PyPDF2 may merge lines or add extra whitespace, so be flexible
+        field_map = {
+            "type": "type",
+            "host": "host",
+            "protocol": "protocol",
+            "username": "username",
+            "password": "password",
+            "tags": "tags",
+            "notes": "notes",
+        }
+
+        # Try line-by-line extraction first (most reliable)
+        lines = block.split("\n")
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Match "Label: value" or "Label:value"
+            label_match = re.match(r'^(Type|Host|Protocol|Username|Password|Tags|Notes)\s*:\s*(.*)', line, re.IGNORECASE)
+            if label_match:
+                label_key = label_match.group(1).lower()
+                value = label_match.group(2).strip()
+
+                if label_key == "host" and value:
+                    # Split host:port if present
+                    # Handle IPv6 addresses in brackets [::1]:port
+                    if value.startswith("["):
+                        bracket_end = value.find("]")
+                        if bracket_end != -1 and bracket_end + 1 < len(value) and value[bracket_end + 1] == ":":
+                            cred["host"] = value[:bracket_end + 1]
+                            cred["port"] = value[bracket_end + 2:]
+                        else:
+                            cred["host"] = value
+                    elif ":" in value:
+                        # Could be host:port - but only split on last colon
+                        # to handle cases like "hostname:8080"
+                        parts = value.rsplit(":", 1)
+                        if len(parts) == 2 and parts[1].isdigit():
+                            cred["host"] = parts[0]
+                            cred["port"] = parts[1]
+                        else:
+                            cred["host"] = value
+                    else:
+                        cred["host"] = value
+                elif label_key in field_map:
+                    mapped_key = field_map[label_key]
+                    cred[mapped_key] = value
+
+        # Strip trailing "..." from notes (export truncates to 200 chars)
+        if cred["notes"].endswith("..."):
+            cred["notes"] = cred["notes"][:-3].rstrip()
+
+        credentials.append(cred)
+
+    return credentials
+
+# ============================================================
 # USAGE STATS (optimized with __slots__)
 # ============================================================
 class UsageStats:
@@ -1566,6 +1699,271 @@ class ExportDialog(ctk.CTkToplevel):
             self.err_label.configure(text=f"Export failed: {str(e)}", text_color=COLORS["danger"])
 
 # ============================================================
+# IMPORT DIALOG
+# ============================================================
+class ImportDialog(ctk.CTkToplevel):
+    """Dialog for importing credentials from a SecureVault-exported PDF."""
+
+    def __init__(self, master, vault: Vault):
+        super().__init__(master)
+        self.vault = vault
+        self.result = None
+        self.parsed_credentials: List[dict] = []
+        self.check_vars: List[ctk.BooleanVar] = []
+
+        self.title("Import Credentials from PDF")
+        self.geometry("600x700")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.configure(fg_color=COLORS["bg_primary"])
+
+        # Center on parent
+        self.update_idletasks()
+        x = master.winfo_x() + (master.winfo_width() - 600) // 2
+        y = master.winfo_y() + (master.winfo_height() - 700) // 2
+        self.geometry(f"600x700+{x}+{y}")
+
+        # Header
+        ctk.CTkLabel(self, text="Import Credentials from PDF", font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(pady=(25, 8))
+        ctk.CTkLabel(self, text="Import credentials from a SecureVault-exported PDF",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 20))
+
+        # Step 1: File selection + password
+        self.step1_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.step1_frame.pack(fill="x", padx=30)
+
+        ctk.CTkLabel(self.step1_frame, text="Step 1: Select PDF File",
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(anchor="w", pady=(0, 8))
+
+        # File selection row
+        file_row = ctk.CTkFrame(self.step1_frame, fg_color="transparent")
+        file_row.pack(fill="x", pady=(0, 8))
+
+        self.file_path_var = ctk.StringVar(value="No file selected")
+        ctk.CTkLabel(file_row, textvariable=self.file_path_var, font=ctk.CTkFont(size=10),
+                    text_color=COLORS["text_secondary"], anchor="w", wraplength=400).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(file_row, text="Select PDF", width=100, height=32, corner_radius=6,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11),
+                     command=self._select_file).pack(side="right")
+
+        # Password
+        ctk.CTkLabel(self.step1_frame, text="PDF Password", font=ctk.CTkFont(size=10),
+                    text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(4, 3))
+        self.pw_entry = PwEntry(self.step1_frame, placeholder="Password used to encrypt the PDF")
+        self.pw_entry.pack(fill="x", pady=(0, 10))
+
+        # Parse button
+        ctk.CTkButton(self.step1_frame, text="Parse PDF", width=120, height=36, corner_radius=8,
+                     fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     command=self._parse_pdf).pack(anchor="w", pady=(0, 8))
+
+        # Error label
+        self.err_label = ctk.CTkLabel(self.step1_frame, text="", font=ctk.CTkFont(size=10),
+                                      text_color=COLORS["danger"])
+        self.err_label.pack(fill="x", pady=(0, 8))
+
+        # Separator
+        ctk.CTkFrame(self, fg_color=COLORS["border"], height=1).pack(fill="x", padx=30, pady=(4, 12))
+
+        # Step 2: Preview (hidden until parse)
+        self.step2_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.step2_frame.pack(fill="both", expand=True, padx=30)
+
+        self.step2_header = ctk.CTkFrame(self.step2_frame, fg_color="transparent")
+        self.step2_header.pack(fill="x")
+
+        self.step2_title = ctk.CTkLabel(self.step2_header, text="Step 2: Review Credentials",
+                                        font=ctk.CTkFont(size=13, weight="bold"),
+                                        text_color=COLORS["text_primary"])
+        self.step2_title.pack(side="left")
+
+        self.count_label = ctk.CTkLabel(self.step2_header, text="",
+                                        font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"])
+        self.count_label.pack(side="right")
+
+        # Select All / Deselect All buttons
+        self.sel_btn_frame = ctk.CTkFrame(self.step2_frame, fg_color="transparent")
+        self.sel_btn_frame.pack(fill="x", pady=(6, 6))
+
+        ctk.CTkButton(self.sel_btn_frame, text="Select All", width=80, height=26, corner_radius=5,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                     command=self._select_all).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(self.sel_btn_frame, text="Deselect All", width=80, height=26, corner_radius=5,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                     command=self._deselect_all).pack(side="left")
+
+        # Scrollable list of credentials
+        self.cred_list = ctk.CTkScrollableFrame(self.step2_frame, fg_color="transparent")
+        self.cred_list.pack(fill="both", expand=True, pady=(4, 8))
+
+        # Step 3: Import button row
+        self.step3_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.step3_frame.pack(fill="x", padx=30, pady=(0, 20))
+
+        self.import_btn = ctk.CTkButton(self.step3_frame, text="Import 0 Selected", width=180, height=40,
+                                        corner_radius=10, fg_color=COLORS["accent"],
+                                        hover_color=COLORS["accent_hover"], text_color=COLORS["text_primary"],
+                                        font=ctk.CTkFont(size=13, weight="bold"),
+                                        command=self._do_import, state="disabled")
+        self.import_btn.pack(side="right")
+
+        ctk.CTkButton(self.step3_frame, text="Cancel", width=100, height=40, corner_radius=10,
+                     fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     command=self.destroy).pack(side="left")
+
+        # Holds selected PDF path
+        self._pdf_path: str = ""
+
+    def _select_file(self):
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename(
+            parent=self,
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            title="Select SecureVault PDF Export"
+        )
+        if filepath:
+            self._pdf_path = filepath
+            # Show just the filename, not full path for cleanliness
+            display = filepath if len(filepath) <= 60 else "..." + filepath[-57:]
+            self.file_path_var.set(display)
+            self.err_label.configure(text="", text_color=COLORS["danger"])
+
+    def _parse_pdf(self):
+        if not self._pdf_path:
+            self.err_label.configure(text="Please select a PDF file first", text_color=COLORS["danger"])
+            return
+
+        password = self.pw_entry.get()
+        if not password:
+            self.err_label.configure(text="Please enter the PDF password", text_color=COLORS["danger"])
+            return
+
+        try:
+            self.parsed_credentials = import_credentials_from_pdf(self._pdf_path, password)
+        except ValueError as e:
+            self.err_label.configure(text=str(e), text_color=COLORS["danger"])
+            return
+        except Exception as e:
+            self.err_label.configure(text=f"Parse failed: {str(e)[:80]}", text_color=COLORS["danger"])
+            return
+
+        if not self.parsed_credentials:
+            self.err_label.configure(text="No credentials found in the PDF", text_color=COLORS["danger"])
+            return
+
+        self.err_label.configure(text=f"Successfully parsed {len(self.parsed_credentials)} credential(s)",
+                                 text_color=COLORS["success"])
+        self._populate_credential_list()
+
+    def _populate_credential_list(self):
+        # Clear existing items
+        for w in self.cred_list.winfo_children():
+            w.destroy()
+        self.check_vars.clear()
+
+        self.count_label.configure(text=f"{len(self.parsed_credentials)} found")
+
+        for i, cred in enumerate(self.parsed_credentials):
+            var = ctk.BooleanVar(value=True)
+            self.check_vars.append(var)
+
+            row = ctk.CTkFrame(self.cred_list, fg_color=COLORS["bg_secondary"], corner_radius=8, height=48)
+            row.pack(fill="x", pady=2)
+            row.pack_propagate(False)
+
+            # Checkbox
+            chk = ctk.CTkCheckBox(row, text="", variable=var, width=22, corner_radius=4,
+                                  fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                  command=self._update_import_count)
+            chk.pack(side="left", padx=(10, 6))
+
+            # Environment color bar
+            env = cred.get("environment", "")
+            ec = (COLORS["prod"] if env == "Production" else
+                  COLORS["staging"] if env == "Staging" else
+                  COLORS["dev"] if env == "Development" else COLORS["border"])
+            ctk.CTkFrame(row, width=3, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
+
+            # Credential info
+            info_frame = ctk.CTkFrame(row, fg_color="transparent")
+            info_frame.pack(side="left", fill="both", expand=True, padx=8, pady=6)
+
+            name_text = cred.get("name", "Unknown")
+            ctk.CTkLabel(info_frame, text=name_text, font=ctk.CTkFont(size=11, weight="bold"),
+                        text_color=COLORS["text_primary"], anchor="w").pack(fill="x")
+
+            detail_parts = []
+            if cred.get("type"):
+                detail_parts.append(cred["type"])
+            if cred.get("environment"):
+                detail_parts.append(cred["environment"])
+            if cred.get("username"):
+                detail_parts.append(cred["username"])
+            detail_text = " | ".join(detail_parts) if detail_parts else "No details"
+
+            ctk.CTkLabel(info_frame, text=detail_text[:60], font=ctk.CTkFont(size=9),
+                        text_color=COLORS["text_tertiary"], anchor="w").pack(fill="x")
+
+        self._update_import_count()
+
+    def _update_import_count(self):
+        selected = sum(1 for v in self.check_vars if v.get())
+        self.import_btn.configure(text=f"Import {selected} Selected",
+                                  state="normal" if selected > 0 else "disabled")
+
+    def _select_all(self):
+        for v in self.check_vars:
+            v.set(True)
+        self._update_import_count()
+        self._populate_credential_list()
+
+    def _deselect_all(self):
+        for v in self.check_vars:
+            v.set(False)
+        self._update_import_count()
+        self._populate_credential_list()
+
+    def _do_import(self):
+        selected_count = 0
+        errors = []
+
+        for i, cred in enumerate(self.parsed_credentials):
+            if i < len(self.check_vars) and self.check_vars[i].get():
+                try:
+                    self.vault.add(
+                        name=cred.get("name", "Imported"),
+                        ctype=cred.get("type", "Other"),
+                        host=cred.get("host", ""),
+                        port=cred.get("port", ""),
+                        user=cred.get("username", ""),
+                        password=cred.get("password", ""),
+                        env=cred.get("environment", ""),
+                        proto=cred.get("protocol", ""),
+                        tags=cred.get("tags", ""),
+                        notes=cred.get("notes", ""),
+                    )
+                    selected_count += 1
+                except Exception as e:
+                    errors.append(f"{cred.get('name', '?')}: {str(e)[:40]}")
+
+        if errors:
+            self.err_label.configure(
+                text=f"Imported {selected_count}, failed {len(errors)}: {errors[0]}",
+                text_color=COLORS["warning"])
+        else:
+            self.result = selected_count
+            self.destroy()
+
+# ============================================================
 # APP
 # ============================================================
 class ClipboardManager:
@@ -1923,6 +2321,7 @@ class App(ctk.CTk):
         nav.pack(fill="x", padx=8, pady=4)
         for txt, cmd in [("All Credentials", self._view_all), ("Recent", self._view_recent),
                          ("By Environment", self._view_env), ("Export to PDF", self._view_export),
+                         ("Import from PDF", self._view_import),
                          ("Generate Password", self._view_gen), ("Settings", self._view_settings)]:
             ctk.CTkButton(nav, text=txt, height=32, corner_radius=6, fg_color="transparent", hover_color=COLORS["bg_tertiary"],
                          text_color=COLORS["text_primary"], anchor="w", font=ctk.CTkFont(size=12), command=cmd).pack(fill="x", pady=1)
@@ -2217,6 +2616,48 @@ class App(ctk.CTk):
             ctk.CTkLabel(success_dialog, text="Share the PDF password with the recipient securely!",
                         font=ctk.CTkFont(size=10), text_color=COLORS["warning"]).pack(pady=(0, 15))
             Btn(success_dialog, text="OK", width=80, command=success_dialog.destroy).pack()
+
+    def _view_import(self):
+        """Import view - import credentials from a SecureVault-exported PDF."""
+        for w in self.content.winfo_children(): w.destroy()
+
+        ctk.CTkLabel(self.content, text="Import from PDF", font=ctk.CTkFont(size=20, weight="bold"),
+                    text_color=COLORS["text_primary"]).pack(anchor="w", padx=20, pady=(20, 8))
+        ctk.CTkLabel(self.content, text="Import credentials from a password-protected SecureVault PDF export",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(anchor="w", padx=20, pady=(0, 14))
+
+        if not _load_pdf_modules():
+            # Show error when PDF modules are not available
+            err_frame = ctk.CTkFrame(self.content, fg_color=COLORS["bg_secondary"], corner_radius=10)
+            err_frame.pack(fill="x", padx=20, pady=10)
+            ctk.CTkLabel(err_frame, text="PDF Import requires additional packages.\n\nPlease run:\npip install PyPDF2",
+                        font=ctk.CTkFont(size=12), text_color=COLORS["text_primary"]).pack(pady=30, padx=20)
+            return
+
+        dialog = ImportDialog(self, self.vault)
+        self.wait_window(dialog)
+
+        if dialog.result:
+            # Show success message
+            count = dialog.result
+            success_dialog = ctk.CTkToplevel(self)
+            success_dialog.title("Import Complete")
+            success_dialog.geometry("400x180")
+            success_dialog.transient(self)
+            success_dialog.grab_set()
+            success_dialog.configure(fg_color=COLORS["bg_primary"])
+
+            ctk.CTkLabel(success_dialog, text="Import Successful!",
+                        font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["success"]).pack(pady=(20, 10))
+            ctk.CTkLabel(success_dialog, text=f"Imported {count} credential(s) into your vault",
+                        font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 10))
+            ctk.CTkLabel(success_dialog, text="Review imported credentials in All Credentials",
+                        font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(pady=(0, 15))
+            Btn(success_dialog, text="OK", width=80,
+                command=lambda: (success_dialog.destroy(), self._view_all())).pack()
+        else:
+            # User cancelled or no import - go back to all credentials
+            self._view_all()
 
     def _view_detail(self, e: dict):
         for w in self.content.winfo_children(): w.destroy()

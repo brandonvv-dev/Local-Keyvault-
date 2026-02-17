@@ -1,0 +1,4 @@
+dist/
+build/
+SecureVault-Linux
+__pycache__/
