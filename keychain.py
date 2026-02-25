@@ -31,6 +31,7 @@ import json
 import base64
 import secrets
 import hashlib
+import math
 import shutil
 import time
 import threading
@@ -101,7 +102,7 @@ def _load_pdf_modules():
 # CONFIGURATION
 # ============================================================
 APP_NAME = "SecureVault"
-APP_VERSION = "4.0.0"  # Major update: themes, favorites, expiry, breach check
+APP_VERSION = "7.0.0"  # UX polish: hover effects, keyboard shortcuts, copy feedback, confirmations
 VAULT_FILENAME = "vault.enc"
 STATS_FILENAME = "stats.enc"
 SETTINGS_FILENAME = "settings.json"
@@ -175,19 +176,32 @@ COMMON_PASSWORDS = {
 # DevOps credential types with icons and default fields
 # Format: (display_name, icon, default_protocol, suggested_port)
 CREDENTIAL_CATEGORIES = {
-    "Linux Server": {"icon": "🐧", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password"]},
+    # Servers
     "Windows Server": {"icon": "🪟", "proto": "RDP", "port": "3389", "fields": ["host", "port", "username", "password"]},
+    "Linux Server": {"icon": "🐧", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password"]},
+    "IIS Server": {"icon": "🌐", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password"]},
+    # Databases
+    "SQL Server": {"icon": "🗃️", "proto": "MSSQL", "port": "1433", "fields": ["host", "port", "username", "password", "database"]},
     "Database - MySQL": {"icon": "🗄️", "proto": "MySQL", "port": "3306", "fields": ["host", "port", "username", "password", "database"]},
     "Database - PostgreSQL": {"icon": "🐘", "proto": "PostgreSQL", "port": "5432", "fields": ["host", "port", "username", "password", "database"]},
     "Database - MongoDB": {"icon": "🍃", "proto": "MongoDB", "port": "27017", "fields": ["host", "port", "username", "password", "database"]},
     "Database - Redis": {"icon": "⚡", "proto": "Redis", "port": "6379", "fields": ["host", "port", "password"]},
-    "Database - MSSQL": {"icon": "📊", "proto": "MSSQL", "port": "1433", "fields": ["host", "port", "username", "password", "database"]},
-    "Web Server - Nginx": {"icon": "🌐", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password", "config_path"]},
-    "Web Server - Apache": {"icon": "🪶", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password", "config_path"]},
-    "SMTP / Email": {"icon": "📧", "proto": "SMTP", "port": "587", "fields": ["host", "port", "username", "password", "from_email"]},
-    "FTP / SFTP": {"icon": "📁", "proto": "FTP/SFTP", "port": "22", "fields": ["host", "port", "username", "password", "root_path"]},
-    "Docker Registry": {"icon": "🐳", "proto": "HTTPS", "port": "443", "fields": ["host", "username", "password", "registry_url"]},
-    "Kubernetes": {"icon": "☸️", "proto": "K8s API", "port": "6443", "fields": ["host", "port", "token", "namespace"]},
+    # Accounts
+    "Domain Account": {"icon": "🏢", "proto": "LDAP", "port": "389", "fields": ["host", "username", "password"]},
+    "User Account": {"icon": "👤", "proto": "HTTPS", "port": "", "fields": ["username", "password", "email", "role"]},
+    "Service Account": {"icon": "🤖", "proto": "API", "port": "", "fields": ["username", "password", "service_name"]},
+    "Root / Admin": {"icon": "👑", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password"]},
+    # .NET / Config
+    ".NET Application": {"icon": "🟣", "proto": "HTTPS", "port": "", "fields": ["host", "username", "password"]},
+    "AppSettings": {"icon": "⚙️", "proto": "Other", "port": "", "fields": ["username", "password"]},
+    "Web.config": {"icon": "📄", "proto": "Other", "port": "", "fields": ["host", "username", "password"]},
+    "Environment Variable": {"icon": "📋", "proto": "Other", "port": "", "fields": ["username", "password"]},
+    # Secrets
+    "Application Secret": {"icon": "🔏", "proto": "API", "port": "", "fields": ["username", "password"]},
+    "GitHub Secret": {"icon": "🐙", "proto": "HTTPS", "port": "", "fields": ["username", "password"]},
+    "API Key": {"icon": "🔑", "proto": "API", "port": "", "fields": ["api_key", "api_secret", "endpoint"]},
+    "SSL Certificate": {"icon": "📜", "proto": "HTTPS", "port": "", "fields": ["domain", "private_key", "certificate", "expiry"]},
+    # Cloud & CI/CD
     "AWS Console": {"icon": "☁️", "proto": "Console", "port": "", "fields": ["username", "password", "account_id", "mfa_secret"]},
     "Azure Portal": {"icon": "🔷", "proto": "Console", "port": "", "fields": ["username", "password", "tenant_id"]},
     "GCP Console": {"icon": "🔶", "proto": "Console", "port": "", "fields": ["username", "password", "project_id"]},
@@ -195,21 +209,19 @@ CREDENTIAL_CATEGORIES = {
     "CI/CD - Jenkins": {"icon": "🔧", "proto": "HTTPS", "port": "8080", "fields": ["host", "port", "username", "password", "api_token"]},
     "CI/CD - GitLab": {"icon": "🦊", "proto": "HTTPS", "port": "", "fields": ["host", "username", "password", "access_token"]},
     "CI/CD - GitHub": {"icon": "🐙", "proto": "HTTPS", "port": "", "fields": ["username", "password", "access_token"]},
-    "API Key": {"icon": "🔑", "proto": "API", "port": "", "fields": ["api_key", "api_secret", "endpoint"]},
-    "Service Account": {"icon": "🤖", "proto": "API", "port": "", "fields": ["username", "password", "service_name"]},
+    # Web & Email
+    "Web Server - Nginx": {"icon": "🌐", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password", "config_path"]},
+    "Web Server - Apache": {"icon": "🪶", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password", "config_path"]},
+    "SMTP / Email": {"icon": "📧", "proto": "SMTP", "port": "587", "fields": ["host", "port", "username", "password", "from_email"]},
+    "FTP / SFTP": {"icon": "📁", "proto": "FTP/SFTP", "port": "22", "fields": ["host", "port", "username", "password", "root_path"]},
+    # Network
     "VPN / Tunnel": {"icon": "🔒", "proto": "VPN", "port": "", "fields": ["host", "port", "username", "password", "vpn_type"]},
     "Network - Router": {"icon": "📡", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password", "enable_password"]},
     "Network - Switch": {"icon": "🔀", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password", "enable_password"]},
     "Network - Firewall": {"icon": "🛡️", "proto": "HTTPS", "port": "443", "fields": ["host", "port", "username", "password"]},
     "DNS Provider": {"icon": "🌍", "proto": "API", "port": "", "fields": ["api_key", "api_secret", "zone"]},
-    "SSL Certificate": {"icon": "📜", "proto": "HTTPS", "port": "", "fields": ["domain", "private_key", "certificate", "expiry"]},
-    "Monitoring - Grafana": {"icon": "📈", "proto": "HTTPS", "port": "3000", "fields": ["host", "port", "username", "password", "api_key"]},
-    "Monitoring - Prometheus": {"icon": "🔥", "proto": "HTTPS", "port": "9090", "fields": ["host", "port", "username", "password"]},
-    "Logging - ELK": {"icon": "📋", "proto": "HTTPS", "port": "5601", "fields": ["host", "port", "username", "password"]},
-    "Backup Service": {"icon": "💾", "proto": "API", "port": "", "fields": ["host", "username", "password", "bucket"]},
-    "cPanel / Plesk": {"icon": "⚙️", "proto": "HTTPS", "port": "2083", "fields": ["host", "port", "username", "password"]},
-    "User Account": {"icon": "👤", "proto": "HTTPS", "port": "", "fields": ["username", "password", "email", "role"]},
-    "Root / Admin": {"icon": "👑", "proto": "SSH", "port": "22", "fields": ["host", "port", "username", "password"]},
+    # Other
+    "Normal Password": {"icon": "🔐", "proto": "Other", "port": "", "fields": ["username", "password"]},
     "Other": {"icon": "🔐", "proto": "Other", "port": "", "fields": ["host", "port", "username", "password"]},
 }
 
@@ -246,6 +258,8 @@ COLORS_DARK = {
     "prod": "#F85149",
     "staging": "#D29922",
     "dev": "#3FB950",
+    "danger_hover": "#FF6961",
+    "warning_text": "#FFFFFF",
 }
 
 # Light theme
@@ -266,6 +280,8 @@ COLORS_LIGHT = {
     "prod": "#CF222E",
     "staging": "#9A6700",
     "dev": "#1A7F37",
+    "danger_hover": "#E5534B",
+    "warning_text": "#FFFFFF",
 }
 
 # Active colors (set by theme)
@@ -449,70 +465,70 @@ def check_password_hibp(pw: str) -> Tuple[bool, int, str]:
 
 def password_strength(pw: str) -> Tuple[str, int, str, str]:
     """
-    Strict password strength scoring based on NIST/OWASP guidelines.
+    Entropy-based password strength scoring.
     Returns (label, score_percent, color, details)
     """
     if not pw:
         return ("None", 0, COLORS["danger"], "Enter a password")
 
     length = len(pw)
-    score = 0
-    details = []
 
-    # Check for common passwords first (instant fail)
+    # Check for common/breached passwords first (instant fail)
     is_common, common_msg = check_password_breach(pw)
     if is_common:
         return ("Breached", 5, COLORS["danger"], common_msg)
 
-    # Length scoring (most important factor) - up to 50 points
-    if length >= 4: score += 5
-    if length >= 8: score += 10
-    if length >= 12: score += 10
-    if length >= 16: score += 10
-    if length >= 20: score += 8
-    if length >= 32: score += 7
-
-    # Character diversity - up to 40 points
+    # Determine character pool size from what is actually present
     has_upper = any(c.isupper() for c in pw)
     has_lower = any(c.islower() for c in pw)
     has_digit = any(c.isdigit() for c in pw)
     has_symbol = any(c in "!@#$%^&*()-_=+[]{}|;:,.<>?/~`" for c in pw)
 
-    if has_upper: score += 10
-    if has_lower: score += 10
-    if has_digit: score += 10
-    if has_symbol: score += 10
+    pool_size = 0
+    if has_upper: pool_size += 26
+    if has_lower: pool_size += 26
+    if has_digit: pool_size += 10
+    if has_symbol: pool_size += 32
 
-    # Bonus for high entropy - up to 10 points
-    unique_chars = len(set(pw))
-    if unique_chars >= length * 0.7: score += 5
-    if unique_chars >= length * 0.9: score += 5
+    # Fallback: if somehow no category matched, assume lowercase
+    if pool_size == 0:
+        pool_size = 26
 
-    # Penalties
-    if length < 8:
-        score = min(score, 25)
-        details.append("Too short (<8)")
+    # Calculate entropy bits: length * log2(pool_size)
+    entropy_bits = length * math.log2(pool_size)
+
+    # Map entropy to 0-100 score using 128 bits as the 100% reference
+    score = min(100, int(entropy_bits * 100 / 128))
+
+    # Build suggestions for missing character types
+    suggestions = []
     if not (has_upper and has_lower):
-        details.append("Add mixed case")
+        suggestions.append("Add mixed case")
     if not has_digit:
-        details.append("Add numbers")
+        suggestions.append("Add numbers")
     if not has_symbol:
-        details.append("Add symbols")
+        suggestions.append("Add symbols")
 
-    # Cap at 100
-    score = min(100, score)
+    # Determine label and color based on entropy thresholds
+    bits_int = int(entropy_bits)
 
-    # Determine label and color
-    if score < 20:
-        return ("Critical", score, COLORS["danger"], "Extremely weak")
-    elif score < 40:
-        return ("Weak", score, COLORS["danger"], ", ".join(details) if details else "Needs improvement")
-    elif score < 60:
-        return ("Fair", score, COLORS["warning"], ", ".join(details) if details else "Acceptable")
-    elif score < 80:
-        return ("Strong", score, COLORS["accent"], "Good security")
+    if entropy_bits < 36:
+        detail = "Extremely weak"
+        if suggestions:
+            detail = ", ".join(suggestions) + f" ({bits_int}-bit entropy)"
+        return ("Critical", score, COLORS["danger"], detail)
+    elif entropy_bits < 60:
+        detail = ", ".join(suggestions) if suggestions else "Needs improvement"
+        detail += f" ({bits_int}-bit entropy)"
+        return ("Weak", score, COLORS["danger"], detail)
+    elif entropy_bits < 80:
+        detail = ", ".join(suggestions) if suggestions else "Moderate security"
+        detail += f" ({bits_int}-bit entropy)"
+        return ("Fair", score, COLORS["warning"], detail)
+    elif entropy_bits < 100:
+        return ("Strong", score, COLORS["accent"], f"Good security \u00b7 {bits_int}-bit entropy")
     else:
-        return ("Excellent", score, COLORS["success"], "Maximum security")
+        return ("Excellent", score, COLORS["success"], f"{bits_int}-bit entropy")
 
 def get_password_age_days(modified_date: str) -> int:
     """Get password age in days from modified date string."""
@@ -1297,15 +1313,19 @@ class QuickPopup(ctk.CTkToplevel):
         hdr = ctk.CTkFrame(self, fg_color="transparent", height=40)
         hdr.pack(fill="x", padx=14, pady=(14, 6))
         ctk.CTkLabel(hdr, text="Quick Access", font=ctk.CTkFont(size=15, weight="bold"), text_color=COLORS["text_primary"]).pack(side="left")
-        ctk.CTkLabel(hdr, text="Shift+V, P", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"],
-                    fg_color=COLORS["bg_tertiary"], corner_radius=4, width=70, height=22).pack(side="right")
+        hk_settings = get_settings()
+        hk_first = hk_settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        hk_second = hk_settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        hk_display = f"{hk_first}, {hk_second}".upper()
+        ctk.CTkLabel(hdr, text=hk_display, font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"],
+                    fg_color=COLORS["bg_tertiary"], corner_radius=4, width=90, height=22).pack(side="right")
 
         # Search
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._refresh())
         self.search = ctk.CTkEntry(self, textvariable=self.search_var, height=38, corner_radius=6,
                                    border_width=1, border_color=COLORS["accent"], fg_color=COLORS["bg_tertiary"],
-                                   text_color=COLORS["text_primary"], placeholder_text="Search... (Enter=copy, Shift+Enter=type)",
+                                   text_color=COLORS["text_primary"], placeholder_text="Search... (Enter=copy pw, Ctrl+Enter=auto-fill)",
                                    font=ctk.CTkFont(size=13))
         self.search.pack(fill="x", padx=14, pady=(0, 10))
         self.search.focus_set()
@@ -1330,6 +1350,7 @@ class QuickPopup(ctk.CTkToplevel):
         self.bind("<Escape>", lambda _: self._close())
         self.bind("<Return>", lambda _: self._copy())
         self.bind("<Shift-Return>", lambda _: self._type())
+        self.bind("<Control-Return>", lambda _: self._autofill())
         self.bind("<Up>", lambda _: self._move(-1))
         self.bind("<Down>", lambda _: self._move(1))
         self.search.bind("<Up>", lambda _: self._move(-1))
@@ -1363,7 +1384,7 @@ class QuickPopup(ctk.CTkToplevel):
             self._card(e, i)
 
     def _card(self, e: dict, i: int):
-        hover_color = "#1D3A5C"
+        hover_color = COLORS["bg_tertiary"]
         default_color = COLORS["bg_secondary"]
         fr = ctk.CTkFrame(self.lst, fg_color=default_color, corner_radius=8, height=44)
         fr.pack(fill="x", pady=1)
@@ -1381,15 +1402,19 @@ class QuickPopup(ctk.CTkToplevel):
         icon = get_category_icon(ctype)
         ctk.CTkLabel(fr, text=icon, font=ctk.CTkFont(size=16), width=28).pack(side="left", padx=(6, 0))
 
-        # Buttons on right
-        ctk.CTkButton(fr, text="Type", width=40, height=24, corner_radius=6,
+        # Buttons on right (packed right-to-left: Fill, Pw, User)
+        ctk.CTkButton(fr, text="Fill", width=38, height=24, corner_radius=6,
+                     fg_color=COLORS["accent"],
+                     hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=8, weight="bold"),
+                     command=lambda idx=i: self._sel_autofill(idx)).pack(side="right", padx=(2, 6))
+        ctk.CTkButton(fr, text="Pw", width=38, height=24, corner_radius=6,
                      fg_color=COLORS["bg_tertiary"],
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
-                     command=lambda idx=i: self._sel_type(idx)).pack(side="right", padx=(2, 6))
-        ctk.CTkButton(fr, text="Copy", width=40, height=24, corner_radius=6,
+                     command=lambda idx=i: self._sel_copy(idx)).pack(side="right", padx=(2, 0))
+        ctk.CTkButton(fr, text="User", width=42, height=24, corner_radius=6,
                      fg_color=COLORS["bg_tertiary"],
                      hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
-                     command=lambda idx=i: self._sel_copy(idx)).pack(side="right")
+                     command=lambda idx=i: self._sel_copy_user(idx)).pack(side="right")
 
         # Content
         cnt = ctk.CTkFrame(fr, fg_color="transparent")
@@ -1415,10 +1440,28 @@ class QuickPopup(ctk.CTkToplevel):
         self.sel = i
         self._type()
 
+    def _sel_autofill(self, i: int):
+        self.sel = i
+        self._autofill()
+
+    def _sel_copy_user(self, i: int):
+        self.sel = i
+        self._copy_username()
+
     def _copy(self):
         if self.items:
             ClipboardManager.copy(self.vault.get_password(self.items[self.sel]["id"]))
             self.title("Copied!")
+            self.after(350, self._close)
+
+    def _copy_username(self):
+        if self.items:
+            user = self.items[self.sel].get("username", "")
+            if user:
+                ClipboardManager.copy(user)
+                self.title("Username Copied!")
+            else:
+                self.title("No username")
             self.after(350, self._close)
 
     def _type(self):
@@ -1426,7 +1469,48 @@ class QuickPopup(ctk.CTkToplevel):
             pw = self.vault.get_password(self.items[self.sel]["id"])
             self._close()
             time.sleep(0.25)
-            pyautogui.typewrite(pw, interval=0.02)
+            self._safe_type(pw)
+
+    def _autofill(self):
+        """Auto-fill: types username, Tab, password into the focused window."""
+        if self.items:
+            e = self.items[self.sel]
+            user = e.get("username", "")
+            pw = self.vault.get_password(e["id"])
+            self._close()
+            time.sleep(0.3)
+            if user:
+                self._safe_type(user)
+                pyautogui.press("tab")
+                time.sleep(0.05)
+            self._safe_type(pw)
+
+    @staticmethod
+    def _safe_type(text: str):
+        """Type text using clipboard paste for full unicode support."""
+        if not text:
+            return
+        # Pure ASCII: use typewrite for character-by-character reliability
+        try:
+            text.encode("ascii")
+            pyautogui.typewrite(text, interval=0.02)
+        except UnicodeEncodeError:
+            # Non-ASCII: clipboard-based paste for unicode support
+            prev = None
+            try:
+                prev = pyperclip.paste()
+            except Exception:
+                pass
+            pyperclip.copy(text)
+            time.sleep(0.02)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.05)
+            # Restore previous clipboard content
+            if prev is not None:
+                try:
+                    pyperclip.copy(prev)
+                except Exception:
+                    pass
 
     def _close(self):
         self.on_close()
@@ -1445,9 +1529,10 @@ class Entry(ctk.CTkEntry):
 class Btn(ctk.CTkButton):
     def __init__(self, master, text="", primary=True, danger=False, **kw):
         c = COLORS["danger"] if danger else COLORS["accent"] if primary else COLORS["bg_tertiary"]
-        h = "#FF6961" if danger else COLORS["accent_hover"] if primary else COLORS["border"]
+        h = COLORS["danger_hover"] if danger else COLORS["accent_hover"] if primary else COLORS["border"]
+        tc = "#FFFFFF" if primary or danger else COLORS["text_primary"]
         super().__init__(master, text=text, height=38, corner_radius=6, fg_color=c, hover_color=h,
-                        text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"), **kw)
+                        text_color=tc, font=ctk.CTkFont(size=12, weight="bold"), **kw)
 
 class PwEntry(ctk.CTkFrame):
     def __init__(self, master, placeholder="Password / Secret", **kw):
@@ -1456,7 +1541,7 @@ class PwEntry(ctk.CTkFrame):
         self.e = Entry(self, placeholder=placeholder, show="*")
         self.e.pack(side="left", fill="x", expand=True)
         self.b = ctk.CTkButton(self, text="Show", width=50, height=38, corner_radius=6, fg_color=COLORS["bg_tertiary"],
-                              hover_color=COLORS["border"], font=ctk.CTkFont(size=10), command=self._toggle)
+                              hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10), command=self._toggle)
         self.b.pack(side="right", padx=(5, 0))
 
     def _toggle(self):
@@ -1475,17 +1560,21 @@ class Card(ctk.CTkFrame):
         # Card with more info (62px height = 48 + 14)
         super().__init__(master, fg_color=COLORS["bg_secondary"], corner_radius=10, height=62, **kw)
         self.data = data
+        self._on_click = lambda _=None: on_click(data)
+        self._default_color = COLORS["bg_secondary"]
+        self._hover_color = COLORS["bg_tertiary"]
         self.pack_propagate(False)
-        self.bind("<Button-1>", lambda _: on_click(data))
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", lambda _: self.configure(fg_color=self._hover_color))
+        self.bind("<Leave>", lambda _: self.configure(fg_color=self._default_color))
 
         env = data.get("environment", "")
         ec = COLORS["prod"] if env == "Production" else COLORS["staging"] if env == "Staging" else COLORS["dev"] if env == "Development" else COLORS["border"]
 
         # Expiry warning border
-        if data.get("is_expiring"):
-            ctk.CTkFrame(self, width=4, fg_color=COLORS["warning"], corner_radius=0).pack(side="left", fill="y")
-        else:
-            ctk.CTkFrame(self, width=4, fg_color=ec, corner_radius=0).pack(side="left", fill="y")
+        bar = ctk.CTkFrame(self, width=4, fg_color=COLORS["warning"] if data.get("is_expiring") else ec, corner_radius=0)
+        bar.pack(side="left", fill="y")
+        bar.bind("<Button-1>", self._on_click)
 
         # Selection checkbox for export
         if selectable:
@@ -1501,49 +1590,76 @@ class Card(ctk.CTkFrame):
             ctk.CTkButton(self, text="★" if is_fav else "☆", width=28, height=28, corner_radius=6,
                          fg_color=COLORS["warning"] if is_fav else "transparent",
                          hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
-                         text_color=COLORS["text_primary"] if is_fav else COLORS["text_tertiary"],
+                         text_color="#FFFFFF" if is_fav else COLORS["text_tertiary"],
                          command=lambda: on_favorite(data["id"])).pack(side="right", padx=(0, 4))
 
-        # Copy button on right
-        ctk.CTkButton(self, text="Copy", width=60, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=10),
-                     command=lambda: on_copy(data)).pack(side="right", padx=(0, 10), pady=10)
+        # Copy password button on right
+        def _copy_pw():
+            on_copy(data)
+            pw_btn.configure(text="Copied!")
+            self.after(1000, lambda: pw_btn.configure(text="Copy PW"))
+        pw_btn = ctk.CTkButton(self, text="Copy PW", width=60, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
+                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                     command=_copy_pw)
+        pw_btn.pack(side="right", padx=(0, 6), pady=10)
+
+        # Copy username button on right
+        if data.get("username"):
+            def _copy_user():
+                ClipboardManager.copy(data["username"])
+                usr_btn.configure(text="Copied!")
+                self.after(1000, lambda: usr_btn.configure(text="Copy User"))
+            usr_btn = ctk.CTkButton(self, text="Copy User", width=68, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
+                         hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                         command=_copy_user)
+            usr_btn.pack(side="right", padx=(0, 4), pady=10)
 
         # Icon on left
         ctype = data.get("type", "Other")
         icon = get_category_icon(ctype)
         icon_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_tertiary"], corner_radius=8, width=36, height=36)
-        icon_frame.pack(side="left", padx=(8, 0))
+        icon_frame.pack(side="left", padx=(8, 0), pady=13)
         icon_frame.pack_propagate(False)
-        ctk.CTkLabel(icon_frame, text=icon, font=ctk.CTkFont(size=18), text_color=COLORS["text_primary"]).place(relx=0.5, rely=0.5, anchor="center")
+        icon_lbl = ctk.CTkLabel(icon_frame, text=icon, font=ctk.CTkFont(size=16), text_color=COLORS["text_primary"])
+        icon_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        icon_frame.bind("<Button-1>", self._on_click)
+        icon_lbl.bind("<Button-1>", self._on_click)
 
         # Content with more info
         cnt = ctk.CTkFrame(self, fg_color="transparent")
         cnt.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        cnt.bind("<Button-1>", lambda _: on_click(data))
+        cnt.bind("<Button-1>", self._on_click)
 
         # Top row: Name + badges
         top_row = ctk.CTkFrame(cnt, fg_color="transparent")
         top_row.pack(fill="x")
-        top_row.bind("<Button-1>", lambda _: on_click(data))
+        top_row.bind("<Button-1>", self._on_click)
 
-        ctk.CTkLabel(top_row, text=data["name"], font=ctk.CTkFont(size=12, weight="bold"),
-                    text_color=COLORS["text_primary"], anchor="w").pack(side="left")
+        name_lbl = ctk.CTkLabel(top_row, text=data["name"], font=ctk.CTkFont(size=12, weight="bold"),
+                    text_color=COLORS["text_primary"], anchor="w")
+        name_lbl.pack(side="left")
+        name_lbl.bind("<Button-1>", self._on_click)
 
         # SSH key indicator
         if data.get("has_ssh_key"):
-            ctk.CTkLabel(top_row, text="🔑", font=ctk.CTkFont(size=10)).pack(side="left", padx=(4, 0))
+            ssh_lbl = ctk.CTkLabel(top_row, text="🔑", font=ctk.CTkFont(size=10))
+            ssh_lbl.pack(side="left", padx=(4, 0))
+            ssh_lbl.bind("<Button-1>", self._on_click)
 
         # Environment badge
         if env:
-            ctk.CTkLabel(top_row, text=env[:4], font=ctk.CTkFont(size=8, weight="bold"), text_color=ec,
-                        fg_color=COLORS["bg_primary"], corner_radius=4, height=16).pack(side="left", padx=(8, 0))
+            env_lbl = ctk.CTkLabel(top_row, text=env[:4], font=ctk.CTkFont(size=8, weight="bold"), text_color=ec,
+                        fg_color=COLORS["bg_primary"], corner_radius=4, height=16)
+            env_lbl.pack(side="left", padx=(8, 0))
+            env_lbl.bind("<Button-1>", self._on_click)
 
         # Expiry badge
         if show_expiry and data.get("is_expiring"):
             exp_color = COLORS["danger"] if data.get("expiry_days", 0) <= 0 else COLORS["warning"]
-            ctk.CTkLabel(top_row, text=data.get("expiry_msg", ""), font=ctk.CTkFont(size=8, weight="bold"),
-                        text_color=exp_color, fg_color=COLORS["bg_primary"], corner_radius=4, height=16).pack(side="left", padx=(8, 0))
+            exp_lbl = ctk.CTkLabel(top_row, text=data.get("expiry_msg", ""), font=ctk.CTkFont(size=8, weight="bold"),
+                        text_color=exp_color, fg_color=COLORS["bg_primary"], corner_radius=4, height=16)
+            exp_lbl.pack(side="left", padx=(8, 0))
+            exp_lbl.bind("<Button-1>", self._on_click)
 
         # Bottom row: type | user@host:port
         info_parts = []
@@ -1560,8 +1676,10 @@ class Card(ctk.CTkFrame):
         info_line = " • ".join(info_parts) if info_parts else data.get("protocol", "")
 
         if info_line:
-            ctk.CTkLabel(cnt, text=info_line[:50], font=ctk.CTkFont(size=10),
-                        text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(2, 0))
+            info_lbl = ctk.CTkLabel(cnt, text=info_line[:50], font=ctk.CTkFont(size=10),
+                        text_color=COLORS["text_secondary"], anchor="w")
+            info_lbl.pack(fill="x", pady=(2, 0))
+            info_lbl.bind("<Button-1>", self._on_click)
 
 # ============================================================
 # EXPORT DIALOG
@@ -2004,7 +2122,7 @@ class ClipboardManager:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} - System Architect Credentials")
+        self.title("KeyVault")
         self.geometry("980x680")
         self.minsize(880, 620)
 
@@ -2024,6 +2142,8 @@ class App(ctk.CTk):
         self.start_min = False
         self.export_mode = False
         self.selected_for_export: Set[str] = set()
+        self.delete_mode = False
+        self.selected_for_delete: Set[str] = set()
         self.current_sort = settings.get("sort_by", "name")
         self.sort_ascending = settings.get("sort_ascending", True)
 
@@ -2042,8 +2162,8 @@ class App(ctk.CTk):
         if self.tray: return
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        d.rounded_rectangle([16, 28, 48, 56], radius=4, fill="#58A6FF")
-        d.arc([20, 12, 44, 36], 0, 180, fill="#58A6FF", width=6)
+        d.rounded_rectangle([16, 28, 48, 56], radius=4, fill=COLORS["accent"])
+        d.arc([20, 12, 44, 36], 0, 180, fill=COLORS["accent"], width=6)
 
         menu = pystray.Menu(
             TrayItem("Open", self._tray_open, default=True),
@@ -2053,7 +2173,11 @@ class App(ctk.CTk):
             pystray.Menu.SEPARATOR,
             TrayItem("Lock", self._tray_lock),
             TrayItem("Quit", self._tray_quit))
-        self.tray = pystray.Icon(APP_NAME, img, f"{APP_NAME}\nShift+V, P", menu)
+        tray_settings = get_settings()
+        tray_hk_first = tray_settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        tray_hk_second = tray_settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        tray_hk_display = f"{tray_hk_first}, {tray_hk_second}".upper()
+        self.tray = pystray.Icon(APP_NAME, img, f"{APP_NAME}\n{tray_hk_display}", menu)
         threading.Thread(target=self.tray.run, daemon=True).start()
 
     def _setup_hotkey(self):
@@ -2088,7 +2212,29 @@ class App(ctk.CTk):
         if self.vault.unlocked and self.tray: self.withdraw()
         else: self._tray_quit()
 
+    @staticmethod
+    def _load_logo(alpha_factor: float = 1.0):
+        logo_path = Path(__file__).parent / "logo.png"
+        if not logo_path.exists():
+            return None
+        img = Image.open(logo_path).convert("RGBA")
+        datas = img.getdata()
+        new_data = []
+        for item in datas:
+            if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                new_data.append((0, 0, 0, 0))
+            else:
+                if alpha_factor < 1.0:
+                    new_data.append((item[0], item[1], item[2], int(item[3] * alpha_factor)))
+                else:
+                    new_data.append(item)
+        img.putdata(new_data)
+        return img
+
     def _clear(self):
+        self.unbind("<Control-n>")
+        self.unbind("<Control-f>")
+        self.unbind("<Escape>")
         for w in self.winfo_children(): w.destroy()
 
     # ===== SETUP =====
@@ -2097,17 +2243,8 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        logo_path = Path(__file__).parent / "logo.png"
-        if logo_path.exists():
-            setup_logo = Image.open(logo_path).convert("RGBA")
-            datas = setup_logo.getdata()
-            new_data = []
-            for item in datas:
-                if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                    new_data.append((0, 0, 0, 0))
-                else:
-                    new_data.append(item)
-            setup_logo.putdata(new_data)
+        setup_logo = self._load_logo()
+        if setup_logo:
             self._setup_logo = ctk.CTkImage(setup_logo, size=(200, 175))
             ctk.CTkLabel(c, image=self._setup_logo, text="").pack(pady=(0, 4))
         else:
@@ -2154,7 +2291,7 @@ class App(ctk.CTk):
         qr = qrcode.QRCode(version=1, box_size=5, border=2)
         qr.add_data(self.vault.totp_uri())
         qr.make(fit=True)
-        img = qr.make_image(fill_color="white", back_color=COLORS["bg_primary"])
+        img = qr.make_image(fill_color=COLORS["text_primary"], back_color=COLORS["bg_primary"])
         buf = BytesIO()
         img.save(buf, format='PNG')
         buf.seek(0)
@@ -2184,17 +2321,8 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        logo_path = Path(__file__).parent / "logo.png"
-        if logo_path.exists():
-            login_logo = Image.open(logo_path).convert("RGBA")
-            datas = login_logo.getdata()
-            new_data = []
-            for item in datas:
-                if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                    new_data.append((0, 0, 0, 0))
-                else:
-                    new_data.append(item)
-            login_logo.putdata(new_data)
+        login_logo = self._load_logo()
+        if login_logo:
             self._login_logo = ctk.CTkImage(login_logo, size=(200, 175))
             ctk.CTkLabel(c, image=self._login_logo, text="").pack(pady=(0, 4))
         else:
@@ -2296,33 +2424,32 @@ class App(ctk.CTk):
 
         hdr = ctk.CTkFrame(sb, fg_color="transparent")
         hdr.pack(fill="x", padx=14, pady=14)
-        logo_path = Path(__file__).parent / "logo.png"
-        if logo_path.exists():
-            logo_img = Image.open(logo_path).convert("RGBA")
-            datas = logo_img.getdata()
-            new_data = []
-            for item in datas:
-                if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                    new_data.append((item[0], item[1], item[2], 0))
-                else:
-                    new_data.append(item)
-            logo_img.putdata(new_data)
+        logo_img = self._load_logo()
+        if logo_img:
             self._sidebar_logo = ctk.CTkImage(logo_img, size=(160, 140))
             ctk.CTkLabel(hdr, image=self._sidebar_logo, text="").pack(anchor="w", pady=(0, 4))
         else:
             ctk.CTkLabel(hdr, text="SecureVault", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text_primary"]).pack(anchor="w")
-        ctk.CTkLabel(hdr, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(anchor="w")
+        ver_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        ver_row.pack(fill="x")
+        ctk.CTkLabel(ver_row, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(side="left")
+        sidebar_count = len(self.vault.list_all()) if self.vault.unlocked else 0
+        ctk.CTkLabel(ver_row, text=f"{sidebar_count} credentials", font=ctk.CTkFont(size=9), text_color=COLORS["text_tertiary"]).pack(side="right")
 
         hk = ctk.CTkFrame(sb, fg_color=COLORS["bg_tertiary"], corner_radius=5)
         hk.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(hk, text="Shift+V, P anywhere", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["accent"]).pack(pady=5)
+        hotkey_first = settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        hotkey_second = settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        hotkey_display = f"{hotkey_first}, {hotkey_second}".upper()
+        self._hotkey_label = ctk.CTkLabel(hk, text=f"HOTKEY: {hotkey_display}", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["accent"])
+        self._hotkey_label.pack(pady=5)
 
         nav = ctk.CTkFrame(sb, fg_color="transparent")
         nav.pack(fill="x", padx=8, pady=4)
-        for txt, cmd in [("All Credentials", self._view_all), ("Recent", self._view_recent),
-                         ("By Environment", self._view_env), ("Export to PDF", self._view_export),
-                         ("Import from PDF", self._view_import),
-                         ("Generate Password", self._view_gen), ("Settings", self._view_settings)]:
+        for txt, cmd in [("🔑  All Credentials", self._view_all), ("🕐  Recent", self._view_recent),
+                         ("📂  By Environment", self._view_env), ("📤  Export to PDF", self._view_export),
+                         ("📥  Import from PDF", self._view_import),
+                         ("🎲  Generate Password", self._view_gen), ("⚙️  Settings", self._view_settings)]:
             ctk.CTkButton(nav, text=txt, height=32, corner_radius=6, fg_color="transparent", hover_color=COLORS["bg_tertiary"],
                          text_color=COLORS["text_primary"], anchor="w", font=ctk.CTkFont(size=12), command=cmd).pack(fill="x", pady=1)
 
@@ -2330,14 +2457,19 @@ class App(ctk.CTk):
 
         bot = ctk.CTkFrame(sb, fg_color="transparent")
         bot.pack(fill="x", padx=8, pady=14)
-        ctk.CTkButton(bot, text="Minimize to Tray", height=32, corner_radius=6, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=11), command=self.withdraw).pack(fill="x", pady=(0, 5))
-        ctk.CTkButton(bot, text="Lock", height=32, corner_radius=6, fg_color=COLORS["danger"],
-                     hover_color="#FF6961", font=ctk.CTkFont(size=11), command=self._lock).pack(fill="x")
+        ctk.CTkButton(bot, text="⬇️  Minimize to Tray", height=32, corner_radius=6, fg_color=COLORS["bg_tertiary"],
+                     hover_color=COLORS["border"], font=ctk.CTkFont(size=11), anchor="w", command=self.withdraw).pack(fill="x", pady=(0, 5))
+        ctk.CTkButton(bot, text="🔒  Lock", height=32, corner_radius=6, fg_color=COLORS["danger"],
+                     hover_color=COLORS["danger_hover"], font=ctk.CTkFont(size=11), anchor="w", command=self._lock).pack(fill="x")
 
         self.content = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"], corner_radius=0)
         self.content.pack(side="right", fill="both", expand=True)
         self._view_all()
+
+        # Keyboard shortcuts
+        self.bind("<Control-n>", lambda _: self._view_add())
+        self.bind("<Control-f>", lambda _: self.search.focus_set() if hasattr(self, 'search') else None)
+        self.bind("<Escape>", lambda _: self._view_all())
 
     def _lock(self):
         self.vault.lock()
@@ -2351,7 +2483,25 @@ class App(ctk.CTk):
         hdr = ctk.CTkFrame(self.content, fg_color="transparent")
         hdr.pack(fill="x", padx=20, pady=(20, 14))
         ctk.CTkLabel(hdr, text="All Credentials", font=ctk.CTkFont(size=20, weight="bold"), text_color=COLORS["text_primary"]).pack(side="left")
-        Btn(hdr, text="+ Add", width=100, command=self._view_add).pack(side="right")
+        total_count = len(self.vault.list_all())
+        ctk.CTkLabel(hdr, text=f"({total_count})", font=ctk.CTkFont(size=13), text_color=COLORS["text_tertiary"]).pack(side="left", padx=(8, 0))
+
+        # Right-side buttons: Delete | Add | Star (packed right-to-left so star first)
+        if self.delete_mode:
+            Btn(hdr, text="Cancel", primary=False, width=80, command=self._cancel_delete_mode).pack(side="right")
+            self.delete_sel_btn = Btn(hdr, text="Delete Selected (0)", danger=True, width=160, command=self._do_batch_delete)
+            self.delete_sel_btn.pack(side="right", padx=(0, 9))
+            Btn(hdr, text="Select All", primary=False, width=90, command=self._select_all_for_delete).pack(side="right", padx=(0, 9))
+        else:
+            # Star button
+            ctk.CTkButton(hdr, text="\u2605", width=38, height=38, corner_radius=6,
+                         fg_color=COLORS["warning"] if hasattr(self, '_show_favorites_only') and self._show_favorites_only else COLORS["bg_tertiary"],
+                         hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
+                         command=self._toggle_favorites_filter).pack(side="right")
+            # Add button
+            Btn(hdr, text="+ Add", width=100, command=self._view_add).pack(side="right", padx=(0, 9))
+            # Delete button
+            Btn(hdr, text="Delete", danger=True, width=80, command=self._enter_delete_mode).pack(side="right", padx=(0, 9))
 
         # Show expiry warnings if any
         expiring = self.vault.get_expiring_passwords()
@@ -2361,9 +2511,9 @@ class App(ctk.CTk):
             warn_inner = ctk.CTkFrame(warn_frame, fg_color="transparent")
             warn_inner.pack(fill="x", padx=12, pady=8)
             ctk.CTkLabel(warn_inner, text=f"⚠️ {len(expiring)} password(s) expiring soon or expired",
-                        font=ctk.CTkFont(size=11, weight="bold"), text_color="#1F2328").pack(side="left")
+                        font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["warning_text"]).pack(side="left")
             ctk.CTkButton(warn_inner, text="View", width=60, height=24, corner_radius=6,
-                         fg_color="#1F2328", hover_color="#000000", text_color="#FFFFFF",
+                         fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"], text_color=COLORS["text_primary"],
                          font=ctk.CTkFont(size=10), command=self._view_expiring).pack(side="right")
 
         flt = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -2385,27 +2535,12 @@ class App(ctk.CTk):
         self.sort_combo.set(sort_display.get(self.current_sort, "Name"))
         self.sort_combo.pack(side="left", padx=(8, 0))
 
-        # Favorites filter
-        ctk.CTkButton(flt, text="★", width=38, height=38, corner_radius=6,
-                     fg_color=COLORS["warning"] if hasattr(self, '_show_favorites_only') and self._show_favorites_only else COLORS["bg_tertiary"],
-                     hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
-                     command=self._toggle_favorites_filter).pack(side="right")
-
         # Wrapper for list + watermark logo
         list_wrapper = ctk.CTkFrame(self.content, fg_color="transparent")
         list_wrapper.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        logo_path = Path(__file__).parent / "logo.png"
-        if logo_path.exists():
-            wm_img = Image.open(logo_path).convert("RGBA")
-            datas = wm_img.getdata()
-            new_data = []
-            for item in datas:
-                if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                    new_data.append((0, 0, 0, 0))
-                else:
-                    new_data.append((item[0], item[1], item[2], int(item[3] * 0.07)))
-            wm_img.putdata(new_data)
+        wm_img = self._load_logo(alpha_factor=0.07)
+        if wm_img:
             self._home_watermark = ctk.CTkImage(wm_img, size=(300, 260))
             ctk.CTkLabel(list_wrapper, image=self._home_watermark, text="").place(relx=0.5, rely=0.5, anchor="center")
 
@@ -2474,12 +2609,114 @@ class App(ctk.CTk):
                 Card(self.lst, e, self._view_detail, self._quick_copy,
                      selectable=True, selected=e["id"] in self.selected_for_export,
                      on_select=self._toggle_export_selection, on_favorite=self._toggle_favorite).pack(fill="x", pady=2)
+            elif self.delete_mode:
+                Card(self.lst, e, self._view_detail, self._quick_copy,
+                     selectable=True, selected=e["id"] in self.selected_for_delete,
+                     on_select=self._toggle_delete_selection).pack(fill="x", pady=2)
             else:
                 Card(self.lst, e, self._view_detail, self._quick_copy, on_favorite=self._toggle_favorite).pack(fill="x", pady=2)
 
     def _toggle_favorite(self, eid: str):
         self.vault.toggle_favorite(eid)
         self._refresh_list()
+
+    def _enter_delete_mode(self):
+        self.delete_mode = True
+        self.selected_for_delete.clear()
+        self._view_all()
+
+    def _cancel_delete_mode(self):
+        self.delete_mode = False
+        self.selected_for_delete.clear()
+        self._view_all()
+
+    def _toggle_delete_selection(self, eid: str, selected: bool):
+        if selected:
+            self.selected_for_delete.add(eid)
+        else:
+            self.selected_for_delete.discard(eid)
+        if hasattr(self, 'delete_sel_btn'):
+            self.delete_sel_btn.configure(text=f"Delete Selected ({len(self.selected_for_delete)})")
+
+    def _select_all_for_delete(self):
+        items = self.vault.list_all(sort_by=self.current_sort, ascending=self.sort_ascending)
+        q = self.search_var.get().lower()
+        env = self.env_flt.get() if hasattr(self, "env_flt") else "All"
+        if hasattr(self, '_show_favorites_only') and self._show_favorites_only:
+            items = [e for e in items if e.get("is_favorite")]
+        if q:
+            items = [e for e in items if q in e["name"].lower() or q in e.get("host", "").lower() or
+                    q in e.get("username", "").lower() or q in e.get("tags", "").lower()]
+        if env != "All":
+            items = [e for e in items if e.get("environment") == env]
+        self.selected_for_delete = {e["id"] for e in items}
+        self._refresh_list()
+        if hasattr(self, 'delete_sel_btn'):
+            self.delete_sel_btn.configure(text=f"Delete Selected ({len(self.selected_for_delete)})")
+
+    def _do_batch_delete(self):
+        if not self.selected_for_delete:
+            return
+        count = len(self.selected_for_delete)
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Confirm Delete")
+        dialog.geometry("400x200")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=COLORS["bg_primary"])
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        dialog.geometry(f"400x200+{x}+{y}")
+
+        ctk.CTkLabel(dialog, text=f"Delete {count} Credential(s)?", font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS["danger"]).pack(pady=(20, 10))
+        ctk.CTkLabel(dialog, text="This action cannot be undone.\nAll selected credentials will be permanently deleted.",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 20))
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=30)
+
+        def confirm():
+            dialog.destroy()
+            for eid in list(self.selected_for_delete):
+                self.vault.delete(eid)
+            self.selected_for_delete.clear()
+            self.delete_mode = False
+            self._view_all()
+
+        Btn(btn_frame, text="Cancel", primary=False, width=120, command=dialog.destroy).pack(side="left")
+        Btn(btn_frame, text=f"Delete {count}", danger=True, width=120, command=confirm).pack(side="right")
+
+    def _confirm_delete_single(self, e: dict):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Confirm Delete")
+        dialog.geometry("400x200")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=COLORS["bg_primary"])
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        dialog.geometry(f"400x200+{x}+{y}")
+
+        ctk.CTkLabel(dialog, text=f"Delete \"{e['name']}\"?", font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS["danger"]).pack(pady=(20, 10))
+        ctk.CTkLabel(dialog, text="This action cannot be undone.\nThis credential will be permanently deleted.",
+                    font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(pady=(0, 20))
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=30)
+
+        def confirm():
+            dialog.destroy()
+            self.vault.delete(e["id"])
+            self._view_all()
+
+        Btn(btn_frame, text="Cancel", primary=False, width=120, command=dialog.destroy).pack(side="left")
+        Btn(btn_frame, text="Delete", danger=True, width=120, command=confirm).pack(side="right")
 
     def _toggle_export_selection(self, eid: str, selected: bool):
         if selected:
@@ -2669,13 +2906,17 @@ class App(ctk.CTk):
                      hover_color=COLORS["bg_tertiary"], text_color=COLORS["text_secondary"],
                      font=ctk.CTkFont(size=12), command=self._view_all).pack(side="left")
         ctk.CTkButton(hdr, text="Delete", width=80, height=36, corner_radius=8,
-                     fg_color=COLORS["danger"], hover_color="#FF6961",
+                     fg_color=COLORS["danger"], hover_color=COLORS["danger_hover"],
                      text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
-                     command=lambda: (self.vault.delete(e["id"]), self._view_all())).pack(side="right")
+                     command=lambda: self._confirm_delete_single(e)).pack(side="right")
         ctk.CTkButton(hdr, text="Edit", width=70, height=36, corner_radius=8,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
                      text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
                      command=lambda: self._view_edit(e)).pack(side="right", padx=(0, 8))
+        ctk.CTkButton(hdr, text="Auto-fill", width=80, height=36, corner_radius=8,
+                     fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     command=lambda: self._detail_autofill(e)).pack(side="right", padx=(0, 8))
 
         cnt = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
         cnt.pack(fill="both", expand=True, padx=24, pady=(0, 24))
@@ -2699,7 +2940,7 @@ class App(ctk.CTk):
             exp_frame.pack(fill="x", pady=(0, 12))
             exp_color = COLORS["danger"] if days <= 0 else COLORS["warning"]
             ctk.CTkLabel(exp_frame, text=f"⚠️ Password {exp_msg} - consider rotating",
-                        font=ctk.CTkFont(size=11, weight="bold"), text_color="#1F2328").pack(padx=12, pady=8)
+                        font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["warning_text"]).pack(padx=12, pady=8)
 
         pw = self.vault.get_password(e["id"])
         fields = [("Type", e.get("type")), ("Host", e.get("host")), ("Port", e.get("port")),
@@ -2726,6 +2967,18 @@ class App(ctk.CTk):
         age_days = get_password_age_days(e.get("modified", ""))
         ctk.CTkLabel(stats_frame, text=f"Password age: {age_days} days", font=ctk.CTkFont(size=11),
                     text_color=COLORS["text_tertiary"]).pack(side="right")
+
+    def _detail_autofill(self, e: dict):
+        """Auto-fill from detail view: minimize window, type username+Tab+password."""
+        user = e.get("username", "")
+        pw = self.vault.get_password(e["id"])
+        self.iconify()
+        time.sleep(0.5)
+        if user:
+            QuickPopup._safe_type(user)
+            pyautogui.press("tab")
+            time.sleep(0.05)
+        QuickPopup._safe_type(pw)
 
     def _field(self, parent, label: str, val: str, copy: bool = False, hide: bool = False):
         # Check if multiline (for SSH keys)
@@ -2821,6 +3074,14 @@ class App(ctk.CTk):
                                   font=ctk.CTkFont(size=11), command=toggle)
                 tb.pack(side="right")
 
+    def _on_type_selected(self, selected_type: str):
+        defaults = get_category_defaults(selected_type)
+        if hasattr(self, 'a_proto') and not self.a_proto.get().strip():
+            self.a_proto.set(defaults.get("proto", ""))
+        if hasattr(self, 'a_port') and not self.a_port.get().strip():
+            self.a_port.delete(0, "end")
+            self.a_port.insert(0, defaults.get("port", ""))
+
     # ===== ADD =====
     def _view_add(self):
         for w in self.content.winfo_children(): w.destroy()
@@ -2840,7 +3101,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(frm, text="Type", font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(9, 2))
         self.a_type = ctk.CTkComboBox(frm, values=CREDENTIAL_TYPES, height=38, corner_radius=6, border_width=1,
                                       border_color=COLORS["border"], fg_color=COLORS["bg_tertiary"],
-                                      dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11))
+                                      dropdown_fg_color=COLORS["bg_secondary"], font=ctk.CTkFont(size=11),
+                                      command=self._on_type_selected)
         self.a_type.pack(fill="x")
         self.a_type.set(CREDENTIAL_TYPES[0])
 
@@ -3141,7 +3403,7 @@ class App(ctk.CTk):
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
                      font=ctk.CTkFont(size=12), command=lambda: ClipboardManager.copy(self.gen_var.get())).pack(side="left")
         ctk.CTkButton(br, text="Save as Credential", width=150, height=40, corner_radius=10,
-                     fg_color="#1A5276", hover_color="#1D6FA5",
+                     fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
                      font=ctk.CTkFont(size=12, weight="bold"),
                      command=self._save_gen_as_credential).pack(side="left", padx=(8, 0))
 
@@ -3193,13 +3455,16 @@ class App(ctk.CTk):
         self._upd_str()
 
     def _on_len(self, v):
-        # Clamp value to valid range
-        clamped = max(MIN_PASSWORD_LENGTH, min(int(v), MAX_PASSWORD_LENGTH))
+        # Clamp value to valid range and force slider back
+        clamped = max(MIN_PASSWORD_LENGTH, min(int(float(v)), MAX_PASSWORD_LENGTH))
+        if int(float(v)) != clamped:
+            self.len_sl.set(clamped)
         self.len_lbl.configure(text=str(clamped))
         self._regen()
 
     def _regen(self):
-        self.gen_var.set(generate_password(int(self.len_sl.get()), self.g_up.get(), self.g_lo.get(), self.g_num.get(), self.g_sym.get()))
+        length = max(MIN_PASSWORD_LENGTH, min(int(float(self.len_sl.get())), MAX_PASSWORD_LENGTH))
+        self.gen_var.set(generate_password(length, self.g_up.get(), self.g_lo.get(), self.g_num.get(), self.g_sym.get()))
         self._upd_str()
 
     def _upd_str(self):
@@ -3279,9 +3544,7 @@ class App(ctk.CTk):
         theme = "dark" if value == "Dark" else "light"
         get_settings().set("theme", theme)
         ctk.set_appearance_mode(theme)
-        self.configure(fg_color=COLORS["bg_primary"])
-        # Refresh the view to apply new colors
-        self._view_settings()
+        self._build_main()
 
     def _change_clipboard_clear(self, value):
         time_map = {"1 min": 60, "5 min": 300, "10 min": 600, "30 min": 1800, "Never": 0}
@@ -3331,10 +3594,19 @@ class App(ctk.CTk):
 
     def _apply_hotkey(self):
         settings = get_settings()
-        settings.set("hotkey_first", self.hotkey_first_combo.get())
-        settings.set("hotkey_second", self.hotkey_second_combo.get())
+        new_first = self.hotkey_first_combo.get()
+        new_second = self.hotkey_second_combo.get()
+        settings.set("hotkey_first", new_first)
+        settings.set("hotkey_second", new_second)
         if self.hotkey_handler:
             self.hotkey_handler.reload_config()
+        # Update sidebar hotkey label
+        new_display = f"{new_first}, {new_second}".upper()
+        if hasattr(self, '_hotkey_label') and self._hotkey_label.winfo_exists():
+            self._hotkey_label.configure(text=f"HOTKEY: {new_display}")
+        # Update tray tooltip
+        if self.tray:
+            self.tray.title = f"{APP_NAME}\n{new_display}"
         self._view_settings()
 
     def _check_all_hibp(self):
