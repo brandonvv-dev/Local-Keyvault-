@@ -1337,7 +1337,9 @@ class QuickPopup(ctk.CTkToplevel):
         for txt, val in [("Recent", "recent"), ("Prod", "Production"), ("Staging", "Staging"), ("Dev", "Development"), ("All", "all")]:
             b = ctk.CTkButton(flt, text=txt, width=60, height=26, corner_radius=5,
                              fg_color=COLORS["accent"] if val == "recent" else COLORS["bg_tertiary"],
-                             hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=10),
+                             hover_color=COLORS["accent_hover"],
+                             text_color="#FFFFFF" if val == "recent" else COLORS["text_primary"],
+                             font=ctk.CTkFont(size=10),
                              command=lambda v=val: self._set_filter(v))
             b.pack(side="left", padx=(0, 4))
             setattr(self, f"fb_{val}", b)
@@ -1361,7 +1363,9 @@ class QuickPopup(ctk.CTkToplevel):
     def _set_filter(self, f: str):
         self.filter = f
         for txt, val in [("Recent", "recent"), ("Prod", "Production"), ("Staging", "Staging"), ("Dev", "Development"), ("All", "all")]:
-            getattr(self, f"fb_{val}").configure(fg_color=COLORS["accent"] if val == f else COLORS["bg_tertiary"])
+            getattr(self, f"fb_{val}").configure(
+                fg_color=COLORS["accent"] if val == f else COLORS["bg_tertiary"],
+                text_color="#FFFFFF" if val == f else COLORS["text_primary"])
         self.sel = 0
         self._refresh()
 
@@ -1405,15 +1409,15 @@ class QuickPopup(ctk.CTkToplevel):
         # Buttons on right (packed right-to-left: Fill, Pw, User)
         ctk.CTkButton(fr, text="Fill", width=38, height=24, corner_radius=6,
                      fg_color=COLORS["accent"],
-                     hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=8, weight="bold"),
+                     hover_color=COLORS["accent_hover"], text_color="#FFFFFF", font=ctk.CTkFont(size=8, weight="bold"),
                      command=lambda idx=i: self._sel_autofill(idx)).pack(side="right", padx=(2, 6))
         ctk.CTkButton(fr, text="Pw", width=38, height=24, corner_radius=6,
                      fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
+                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=8),
                      command=lambda idx=i: self._sel_copy(idx)).pack(side="right", padx=(2, 0))
         ctk.CTkButton(fr, text="User", width=42, height=24, corner_radius=6,
                      fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=8),
+                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=8),
                      command=lambda idx=i: self._sel_copy_user(idx)).pack(side="right")
 
         # Content
@@ -1730,7 +1734,7 @@ class ExportDialog(ctk.CTkToplevel):
         # Generate password button
         ctk.CTkButton(form, text="Generate Strong Password", height=28, corner_radius=5,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                     font=ctk.CTkFont(size=10), command=self._gen_password).pack(anchor="w", pady=(0, 12))
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10), command=self._gen_password).pack(anchor="w", pady=(0, 12))
 
         # Confirm password
         ctk.CTkLabel(form, text="Confirm Password", font=ctk.CTkFont(size=10),
@@ -1752,7 +1756,7 @@ class ExportDialog(ctk.CTkToplevel):
                      command=self.destroy).pack(side="left")
         ctk.CTkButton(btn_frame, text="Export PDF", width=160, height=40, corner_radius=10,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
                      command=self._do_export).pack(side="right")
 
     def _gen_password(self):
@@ -1878,7 +1882,7 @@ class ImportDialog(ctk.CTkToplevel):
         # Parse button
         ctk.CTkButton(self.step1_frame, text="Parse PDF", width=120, height=36, corner_radius=8,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
                      command=self._parse_pdf).pack(anchor="w", pady=(0, 8))
 
         # Error label
@@ -1928,7 +1932,7 @@ class ImportDialog(ctk.CTkToplevel):
 
         self.import_btn = ctk.CTkButton(self.step3_frame, text="Import 0 Selected", width=180, height=40,
                                         corner_radius=10, fg_color=COLORS["accent"],
-                                        hover_color=COLORS["accent_hover"], text_color=COLORS["text_primary"],
+                                        hover_color=COLORS["accent_hover"], text_color="#FFFFFF",
                                         font=ctk.CTkFont(size=13, weight="bold"),
                                         command=self._do_import, state="disabled")
         self.import_btn.pack(side="right")
@@ -2216,20 +2220,31 @@ class App(ctk.CTk):
     def _load_logo(alpha_factor: float = 1.0):
         logo_path = Path(__file__).parent / "logo.png"
         if not logo_path.exists():
-            return None
+            return None, None
         img = Image.open(logo_path).convert("RGBA")
         datas = img.getdata()
-        new_data = []
+        # Dark theme: make white pixels transparent so logo blends with dark bg
+        dark_data = []
         for item in datas:
             if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                new_data.append((0, 0, 0, 0))
+                dark_data.append((0, 0, 0, 0))
             else:
                 if alpha_factor < 1.0:
-                    new_data.append((item[0], item[1], item[2], int(item[3] * alpha_factor)))
+                    dark_data.append((item[0], item[1], item[2], int(item[3] * alpha_factor)))
                 else:
-                    new_data.append(item)
-        img.putdata(new_data)
-        return img
+                    dark_data.append(item)
+        dark_img = img.copy()
+        dark_img.putdata(dark_data)
+        # Light theme: keep white pixels, they blend with white bg
+        light_data = []
+        for item in datas:
+            if alpha_factor < 1.0:
+                light_data.append((item[0], item[1], item[2], int(item[3] * alpha_factor)))
+            else:
+                light_data.append(item)
+        light_img = img.copy()
+        light_img.putdata(light_data)
+        return light_img, dark_img
 
     def _clear(self):
         self.unbind("<Control-n>")
@@ -2243,9 +2258,9 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        setup_logo = self._load_logo()
-        if setup_logo:
-            self._setup_logo = ctk.CTkImage(setup_logo, size=(200, 175))
+        light_logo, dark_logo = self._load_logo()
+        if light_logo:
+            self._setup_logo = ctk.CTkImage(light_image=light_logo, dark_image=dark_logo, size=(200, 175))
             ctk.CTkLabel(c, image=self._setup_logo, text="").pack(pady=(0, 4))
         else:
             ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
@@ -2321,9 +2336,9 @@ class App(ctk.CTk):
         c = ctk.CTkFrame(self, fg_color="transparent")
         c.place(relx=0.5, rely=0.5, anchor="center")
 
-        login_logo = self._load_logo()
-        if login_logo:
-            self._login_logo = ctk.CTkImage(login_logo, size=(200, 175))
+        light_logo, dark_logo = self._load_logo()
+        if light_logo:
+            self._login_logo = ctk.CTkImage(light_image=light_logo, dark_image=dark_logo, size=(200, 175))
             ctk.CTkLabel(c, image=self._login_logo, text="").pack(pady=(0, 4))
         else:
             ctk.CTkLabel(c, text="SecureVault", font=ctk.CTkFont(size=32, weight="bold"), text_color=COLORS["text_primary"]).pack(pady=(0, 4))
@@ -2424,9 +2439,9 @@ class App(ctk.CTk):
 
         hdr = ctk.CTkFrame(sb, fg_color="transparent")
         hdr.pack(fill="x", padx=14, pady=14)
-        logo_img = self._load_logo()
-        if logo_img:
-            self._sidebar_logo = ctk.CTkImage(logo_img, size=(160, 140))
+        light_logo, dark_logo = self._load_logo()
+        if light_logo:
+            self._sidebar_logo = ctk.CTkImage(light_image=light_logo, dark_image=dark_logo, size=(160, 140))
             ctk.CTkLabel(hdr, image=self._sidebar_logo, text="").pack(anchor="w", pady=(0, 4))
         else:
             ctk.CTkLabel(hdr, text="SecureVault", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text_primary"]).pack(anchor="w")
@@ -2458,9 +2473,9 @@ class App(ctk.CTk):
         bot = ctk.CTkFrame(sb, fg_color="transparent")
         bot.pack(fill="x", padx=8, pady=14)
         ctk.CTkButton(bot, text="⬇️  Minimize to Tray", height=32, corner_radius=6, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], font=ctk.CTkFont(size=11), anchor="w", command=self.withdraw).pack(fill="x", pady=(0, 5))
+                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11), anchor="w", command=self.withdraw).pack(fill="x", pady=(0, 5))
         ctk.CTkButton(bot, text="🔒  Lock", height=32, corner_radius=6, fg_color=COLORS["danger"],
-                     hover_color=COLORS["danger_hover"], font=ctk.CTkFont(size=11), anchor="w", command=self._lock).pack(fill="x")
+                     hover_color=COLORS["danger_hover"], text_color="#FFFFFF", font=ctk.CTkFont(size=11), anchor="w", command=self._lock).pack(fill="x")
 
         self.content = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"], corner_radius=0)
         self.content.pack(side="right", fill="both", expand=True)
@@ -2539,9 +2554,9 @@ class App(ctk.CTk):
         list_wrapper = ctk.CTkFrame(self.content, fg_color="transparent")
         list_wrapper.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        wm_img = self._load_logo(alpha_factor=0.07)
-        if wm_img:
-            self._home_watermark = ctk.CTkImage(wm_img, size=(300, 260))
+        light_wm, dark_wm = self._load_logo(alpha_factor=0.07)
+        if light_wm:
+            self._home_watermark = ctk.CTkImage(light_image=light_wm, dark_image=dark_wm, size=(300, 260))
             ctk.CTkLabel(list_wrapper, image=self._home_watermark, text="").place(relx=0.5, rely=0.5, anchor="center")
 
         self.lst = ctk.CTkScrollableFrame(list_wrapper, fg_color="transparent")
@@ -2779,7 +2794,7 @@ class App(ctk.CTk):
 
         self.export_btn = ctk.CTkButton(btn_row, text="Export 0 Selected", width=180, height=40, corner_radius=8,
                                         fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                                        text_color=COLORS["text_primary"], font=ctk.CTkFont(size=13, weight="bold"),
+                                        text_color="#FFFFFF", font=ctk.CTkFont(size=13, weight="bold"),
                                         command=self._do_export)
         self.export_btn.pack(side="left", padx=(0, 10))
         Btn(btn_row, text="Cancel", primary=False, width=80, command=self._view_all).pack(side="left")
@@ -2907,7 +2922,7 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=12), command=self._view_all).pack(side="left")
         ctk.CTkButton(hdr, text="Delete", width=80, height=36, corner_radius=8,
                      fg_color=COLORS["danger"], hover_color=COLORS["danger_hover"],
-                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
                      command=lambda: self._confirm_delete_single(e)).pack(side="right")
         ctk.CTkButton(hdr, text="Edit", width=70, height=36, corner_radius=8,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
@@ -2915,7 +2930,7 @@ class App(ctk.CTk):
                      command=lambda: self._view_edit(e)).pack(side="right", padx=(0, 8))
         ctk.CTkButton(hdr, text="Auto-fill", width=80, height=36, corner_radius=8,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
                      command=lambda: self._detail_autofill(e)).pack(side="right", padx=(0, 8))
 
         cnt = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
@@ -3001,7 +3016,7 @@ class App(ctk.CTk):
                     self.after(1000, lambda: cb.configure(text="Copy"))
                 cb = ctk.CTkButton(header, text="Copy", width=60, height=28, corner_radius=6,
                                   fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                                  font=ctk.CTkFont(size=10), command=do_copy)
+                                  text_color="#FFFFFF", font=ctk.CTkFont(size=10), command=do_copy)
                 cb.pack(side="right", padx=(6, 0))
 
             if hide:
@@ -3021,7 +3036,7 @@ class App(ctk.CTk):
 
                 tb = ctk.CTkButton(header, text="Show", width=60, height=28, corner_radius=6,
                                   fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                                  font=ctk.CTkFont(size=10), command=toggle)
+                                  text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10), command=toggle)
                 tb.pack(side="right")
                 toggle()  # Initialize hidden
             else:
@@ -3060,7 +3075,7 @@ class App(ctk.CTk):
                     self.after(1000, lambda: cb.configure(text="Copy"))
                 cb = ctk.CTkButton(right, text="Copy", width=60, height=32, corner_radius=8,
                                   fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                                  font=ctk.CTkFont(size=11), command=do_copy)
+                                  text_color="#FFFFFF", font=ctk.CTkFont(size=11), command=do_copy)
                 cb.pack(side="right", padx=(6, 0))
 
             if hide:
@@ -3071,7 +3086,7 @@ class App(ctk.CTk):
                     tb.configure(text="Hide" if show[0] else "Show")
                 tb = ctk.CTkButton(right, text="Show", width=60, height=32, corner_radius=8,
                                   fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                                  font=ctk.CTkFont(size=11), command=toggle)
+                                  text_color=COLORS["text_primary"], font=ctk.CTkFont(size=11), command=toggle)
                 tb.pack(side="right")
 
     def _on_type_selected(self, selected_type: str):
@@ -3128,7 +3143,7 @@ class App(ctk.CTk):
         self.a_pw = PwEntry(prow)
         self.a_pw.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(prow, text="Generate", width=75, height=38, corner_radius=6, fg_color=COLORS["accent"],
-                     hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=10),
+                     hover_color=COLORS["accent_hover"], text_color="#FFFFFF", font=ctk.CTkFont(size=10),
                      command=lambda: (self.a_pw.delete(0, "end"), self.a_pw.insert(0, generate_password()))).pack(side="right", padx=(4, 0))
         def _copy_add_pw():
             val = self.a_pw.get()
@@ -3138,7 +3153,7 @@ class App(ctk.CTk):
                 self.after(1000, lambda: _copy_btn_a.configure(text="Copy"))
         _copy_btn_a = ctk.CTkButton(prow, text="Copy", width=55, height=38, corner_radius=6,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                     font=ctk.CTkFont(size=10), command=_copy_add_pw)
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10), command=_copy_add_pw)
         _copy_btn_a.pack(side="right", padx=(4, 0))
 
         row2 = ctk.CTkFrame(frm, fg_color="transparent")
@@ -3273,7 +3288,7 @@ class App(ctk.CTk):
         self.e_pw.pack(side="left", fill="x", expand=True)
         self.e_pw.insert(0, pw)
         ctk.CTkButton(prow, text="Generate", width=75, height=38, corner_radius=6, fg_color=COLORS["accent"],
-                     hover_color=COLORS["accent_hover"], font=ctk.CTkFont(size=10),
+                     hover_color=COLORS["accent_hover"], text_color="#FFFFFF", font=ctk.CTkFont(size=10),
                      command=lambda: (self.e_pw.delete(0, "end"), self.e_pw.insert(0, generate_password()))).pack(side="right", padx=(5, 0))
 
         row2 = ctk.CTkFrame(frm, fg_color="transparent")
@@ -3398,13 +3413,13 @@ class App(ctk.CTk):
         br.pack(fill="x", pady=(0, 24))
         ctk.CTkButton(br, text="Regenerate", width=140, height=40, corner_radius=10,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     font=ctk.CTkFont(size=12, weight="bold"), command=self._regen).pack(side="left", padx=(0, 8))
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"), command=self._regen).pack(side="left", padx=(0, 8))
         ctk.CTkButton(br, text="Copy to Clipboard", width=140, height=40, corner_radius=10,
                      fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"],
-                     font=ctk.CTkFont(size=12), command=lambda: ClipboardManager.copy(self.gen_var.get())).pack(side="left")
+                     text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12), command=lambda: ClipboardManager.copy(self.gen_var.get())).pack(side="left")
         ctk.CTkButton(br, text="Save as Credential", width=150, height=40, corner_radius=10,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
                      command=self._save_gen_as_credential).pack(side="left", padx=(8, 0))
 
         # Options section - modern card
@@ -3536,7 +3551,7 @@ class App(ctk.CTk):
                     font=ctk.CTkFont(size=10), text_color=COLORS["text_secondary"], anchor="w").pack(fill="x", pady=(2, 8))
         ctk.CTkButton(hibp_inner, text="Check All Passwords", height=32, corner_radius=6,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     font=ctk.CTkFont(size=11), command=self._check_all_hibp).pack(anchor="w")
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=11), command=self._check_all_hibp).pack(anchor="w")
 
         ctk.CTkLabel(cnt, text=f"SecureVault v{APP_VERSION}", font=ctk.CTkFont(size=10), text_color=COLORS["text_tertiary"]).pack(pady=(14, 0))
 
@@ -3590,7 +3605,7 @@ class App(ctk.CTk):
 
         ctk.CTkButton(btn_frame, text="Apply", width=60, height=28, corner_radius=6,
                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                     font=ctk.CTkFont(size=10), command=self._apply_hotkey).pack(side="left")
+                     text_color="#FFFFFF", font=ctk.CTkFont(size=10), command=self._apply_hotkey).pack(side="left")
 
     def _apply_hotkey(self):
         settings = get_settings()
