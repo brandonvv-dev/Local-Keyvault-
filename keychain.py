@@ -2453,8 +2453,9 @@ class App(ctk.CTk):
 
         hk = ctk.CTkFrame(sb, fg_color=COLORS["bg_tertiary"], corner_radius=5)
         hk.pack(fill="x", padx=10, pady=(0, 10))
-        hotkey_first = settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
-        hotkey_second = settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
+        _hk_settings = get_settings()
+        hotkey_first = _hk_settings.get("hotkey_first", DEFAULT_HOTKEY_FIRST)
+        hotkey_second = _hk_settings.get("hotkey_second", DEFAULT_HOTKEY_SECOND)
         hotkey_display = f"{hotkey_first}, {hotkey_second}".upper()
         self._hotkey_label = ctk.CTkLabel(hk, text=f"HOTKEY: {hotkey_display}", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["accent"])
         self._hotkey_label.pack(pady=5)
