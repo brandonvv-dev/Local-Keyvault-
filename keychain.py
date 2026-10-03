@@ -1099,24 +1099,26 @@ class Vault:
         self._list_cache_valid = False
 
     def list_all(self, sort_by: str = None, ascending: bool = True) -> list:
-        if self._list_cache_valid and sort_by is None:
-            return self._list_cache
-        fields = ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "created", "modified"]
-        result = []
-        for k, v in self.entries.items():
-            entry = {"id": k, "use_count": self.stats.count(k)}
-            for f in fields:
-                entry[f] = v.get(f, "")
-            entry["is_favorite"] = k in self.favorites
-            entry["has_ssh_key"] = "ssh_key_enc" in v
-            # Check expiry
-            is_exp, days, msg = is_password_expiring(v.get("modified", ""))
-            entry["is_expiring"] = is_exp
-            entry["expiry_days"] = days
-            entry["expiry_msg"] = msg
-            result.append(entry)
+        if not self._list_cache_valid:
+            fields = ["name", "type", "host", "port", "username", "environment", "protocol", "tags", "notes", "created", "modified"]
+            result = []
+            for k, v in self.entries.items():
+                entry = {"id": k, "use_count": self.stats.count(k)}
+                for f in fields:
+                    entry[f] = v.get(f, "")
+                entry["is_favorite"] = k in self.favorites
+                entry["has_ssh_key"] = "ssh_key_enc" in v
+                # Check expiry
+                is_exp, days, msg = is_password_expiring(v.get("modified", ""))
+                entry["is_expiring"] = is_exp
+                entry["expiry_days"] = days
+                entry["expiry_msg"] = msg
+                result.append(entry)
+            self._list_cache = result
+            self._list_cache_valid = True
 
-        # Sort based on settings or parameter
+        # Sort a shallow copy of the cached entries based on settings or parameter
+        result = list(self._list_cache)
         sort_key = sort_by or get_settings().get("sort_by", "name")
         if sort_key == "name":
             result.sort(key=lambda x: (not x["is_favorite"], x["name"].lower()), reverse=not ascending)
@@ -1129,9 +1131,6 @@ class Vault:
         else:
             result.sort(key=lambda x: (not x["is_favorite"], x["name"].lower()))
 
-        if sort_by is None:
-            self._list_cache = result
-            self._list_cache_valid = True
         return result
 
     def top_used(self, n: int = 8) -> list:
@@ -1557,6 +1556,18 @@ class PwEntry(ctk.CTkFrame):
     def delete(self, a, b): self.e.delete(a, b)
     def insert(self, i, t): self.e.insert(i, t)
 
+_card_font_cache = {}
+def _card_font(size, weight="normal"):
+    # CTkFont construction is the dominant cost when a card list is rebuilt on every
+    # keystroke; share one instance per (size, weight) instead of one per widget.
+    key = (size, weight)
+    f = _card_font_cache.get(key)
+    if f is None:
+        f = ctk.CTkFont(size=size, weight=weight)
+        _card_font_cache[key] = f
+    return f
+
+
 class Card(ctk.CTkFrame):
     def __init__(self, master, data: dict, on_click: Callable, on_copy: Callable, selectable: bool = False,
                  selected: bool = False, on_select: Callable = None, on_favorite: Callable = None,
@@ -1593,7 +1604,7 @@ class Card(ctk.CTkFrame):
             is_fav = data.get("is_favorite", False)
             ctk.CTkButton(self, text="★" if is_fav else "☆", width=28, height=28, corner_radius=6,
                          fg_color=COLORS["warning"] if is_fav else "transparent",
-                         hover_color=COLORS["warning"], font=ctk.CTkFont(size=14),
+                         hover_color=COLORS["warning"], font=_card_font(14),
                          text_color="#FFFFFF" if is_fav else COLORS["text_tertiary"],
                          command=lambda: on_favorite(data["id"])).pack(side="right", padx=(0, 4))
 
@@ -1603,7 +1614,7 @@ class Card(ctk.CTkFrame):
             pw_btn.configure(text="Copied!")
             self.after(1000, lambda: pw_btn.configure(text="Copy PW"))
         pw_btn = ctk.CTkButton(self, text="Copy PW", width=60, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
-                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                     hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=_card_font(10),
                      command=_copy_pw)
         pw_btn.pack(side="right", padx=(0, 6), pady=10)
 
@@ -1614,7 +1625,7 @@ class Card(ctk.CTkFrame):
                 usr_btn.configure(text="Copied!")
                 self.after(1000, lambda: usr_btn.configure(text="Copy User"))
             usr_btn = ctk.CTkButton(self, text="Copy User", width=68, height=32, corner_radius=8, fg_color=COLORS["bg_tertiary"],
-                         hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(size=10),
+                         hover_color=COLORS["border"], text_color=COLORS["text_primary"], font=_card_font(10),
                          command=_copy_user)
             usr_btn.pack(side="right", padx=(0, 4), pady=10)
 
@@ -1624,7 +1635,7 @@ class Card(ctk.CTkFrame):
         icon_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_tertiary"], corner_radius=8, width=36, height=36)
         icon_frame.pack(side="left", padx=(8, 0), pady=13)
         icon_frame.pack_propagate(False)
-        icon_lbl = ctk.CTkLabel(icon_frame, text=icon, font=ctk.CTkFont(size=16), text_color=COLORS["text_primary"])
+        icon_lbl = ctk.CTkLabel(icon_frame, text=icon, font=_card_font(16), text_color=COLORS["text_primary"])
         icon_lbl.place(relx=0.5, rely=0.5, anchor="center")
         icon_frame.bind("<Button-1>", self._on_click)
         icon_lbl.bind("<Button-1>", self._on_click)
@@ -1639,20 +1650,20 @@ class Card(ctk.CTkFrame):
         top_row.pack(fill="x")
         top_row.bind("<Button-1>", self._on_click)
 
-        name_lbl = ctk.CTkLabel(top_row, text=data["name"], font=ctk.CTkFont(size=12, weight="bold"),
+        name_lbl = ctk.CTkLabel(top_row, text=data["name"], font=_card_font(12, "bold"),
                     text_color=COLORS["text_primary"], anchor="w")
         name_lbl.pack(side="left")
         name_lbl.bind("<Button-1>", self._on_click)
 
         # SSH key indicator
         if data.get("has_ssh_key"):
-            ssh_lbl = ctk.CTkLabel(top_row, text="🔑", font=ctk.CTkFont(size=10))
+            ssh_lbl = ctk.CTkLabel(top_row, text="🔑", font=_card_font(10))
             ssh_lbl.pack(side="left", padx=(4, 0))
             ssh_lbl.bind("<Button-1>", self._on_click)
 
         # Environment badge
         if env:
-            env_lbl = ctk.CTkLabel(top_row, text=env[:4], font=ctk.CTkFont(size=8, weight="bold"), text_color=ec,
+            env_lbl = ctk.CTkLabel(top_row, text=env[:4], font=_card_font(8, "bold"), text_color=ec,
                         fg_color=COLORS["bg_primary"], corner_radius=4, height=16)
             env_lbl.pack(side="left", padx=(8, 0))
             env_lbl.bind("<Button-1>", self._on_click)
@@ -1660,7 +1671,7 @@ class Card(ctk.CTkFrame):
         # Expiry badge
         if show_expiry and data.get("is_expiring"):
             exp_color = COLORS["danger"] if data.get("expiry_days", 0) <= 0 else COLORS["warning"]
-            exp_lbl = ctk.CTkLabel(top_row, text=data.get("expiry_msg", ""), font=ctk.CTkFont(size=8, weight="bold"),
+            exp_lbl = ctk.CTkLabel(top_row, text=data.get("expiry_msg", ""), font=_card_font(8, "bold"),
                         text_color=exp_color, fg_color=COLORS["bg_primary"], corner_radius=4, height=16)
             exp_lbl.pack(side="left", padx=(8, 0))
             exp_lbl.bind("<Button-1>", self._on_click)
@@ -1680,7 +1691,7 @@ class Card(ctk.CTkFrame):
         info_line = " • ".join(info_parts) if info_parts else data.get("protocol", "")
 
         if info_line:
-            info_lbl = ctk.CTkLabel(cnt, text=info_line[:50], font=ctk.CTkFont(size=10),
+            info_lbl = ctk.CTkLabel(cnt, text=info_line[:50], font=_card_font(10),
                         text_color=COLORS["text_secondary"], anchor="w")
             info_lbl.pack(fill="x", pady=(2, 0))
             info_lbl.bind("<Button-1>", self._on_click)
@@ -2138,7 +2149,8 @@ class App(ctk.CTk):
 
         self.vault = Vault()
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._refresh_list())
+        self._search_after_id = None
+        self.search_var.trace_add("write", lambda *_: self._debounced_refresh_list())
         self.tray = None
         self.popup = None
         self.queue = queue.Queue()
@@ -2521,16 +2533,20 @@ class App(ctk.CTk):
 
         # Show expiry warnings if any
         expiring = self.vault.get_expiring_passwords()
-        if expiring:
+        if expiring and not getattr(self, "_expiry_banner_dismissed", False):
             warn_frame = ctk.CTkFrame(self.content, fg_color=COLORS["warning"], corner_radius=8)
             warn_frame.pack(fill="x", padx=20, pady=(0, 10))
             warn_inner = ctk.CTkFrame(warn_frame, fg_color="transparent")
             warn_inner.pack(fill="x", padx=12, pady=8)
             ctk.CTkLabel(warn_inner, text=f"⚠️ {len(expiring)} password(s) expiring soon or expired",
                         font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["warning_text"]).pack(side="left")
+            ctk.CTkButton(warn_inner, text="✕", width=24, height=24, corner_radius=6,
+                         fg_color="transparent", hover_color=COLORS["border"], text_color=COLORS["warning_text"],
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         command=lambda: self._dismiss_expiry_banner(warn_frame)).pack(side="right")
             ctk.CTkButton(warn_inner, text="View", width=60, height=24, corner_radius=6,
                          fg_color=COLORS["bg_tertiary"], hover_color=COLORS["border"], text_color=COLORS["text_primary"],
-                         font=ctk.CTkFont(size=10), command=self._view_expiring).pack(side="right")
+                         font=ctk.CTkFont(size=10), command=self._view_expiring).pack(side="right", padx=(0, 6))
 
         flt = ctk.CTkFrame(self.content, fg_color="transparent")
         flt.pack(fill="x", padx=20, pady=(0, 12))
@@ -2577,6 +2593,10 @@ class App(ctk.CTk):
         self._show_favorites_only = not self._show_favorites_only
         self._view_all()
 
+    def _dismiss_expiry_banner(self, frame):
+        self._expiry_banner_dismissed = True
+        frame.destroy()
+
     def _view_expiring(self):
         """Show credentials with expiring passwords."""
         for w in self.content.winfo_children(): w.destroy()
@@ -2599,6 +2619,13 @@ class App(ctk.CTk):
         for e in expiring:
             card = Card(lst, e, self._view_detail, self._quick_copy, show_expiry=True)
             card.pack(fill="x", pady=2)
+
+    def _debounced_refresh_list(self):
+        # Rebuilding the card list is expensive (many CTk widgets); wait for typing to
+        # pause instead of doing a full rebuild on every keystroke.
+        if self._search_after_id is not None:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(150, self._refresh_list)
 
     def _refresh_list(self):
         if not hasattr(self, "lst"): return
@@ -2954,9 +2981,15 @@ class App(ctk.CTk):
         if is_exp:
             exp_frame = ctk.CTkFrame(cnt, fg_color=COLORS["warning"], corner_radius=8)
             exp_frame.pack(fill="x", pady=(0, 12))
+            exp_row = ctk.CTkFrame(exp_frame, fg_color="transparent")
+            exp_row.pack(fill="x", padx=12, pady=8)
             exp_color = COLORS["danger"] if days <= 0 else COLORS["warning"]
-            ctk.CTkLabel(exp_frame, text=f"⚠️ Password {exp_msg} - consider rotating",
-                        font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["warning_text"]).pack(padx=12, pady=8)
+            ctk.CTkLabel(exp_row, text=f"⚠️ Password {exp_msg} - consider rotating",
+                        font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["warning_text"]).pack(side="left")
+            ctk.CTkButton(exp_row, text="✕", width=24, height=24, corner_radius=6,
+                         fg_color="transparent", hover_color=COLORS["border"], text_color=COLORS["warning_text"],
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         command=exp_frame.destroy).pack(side="right")
 
         pw = self.vault.get_password(e["id"])
         fields = [("Type", e.get("type")), ("Host", e.get("host")), ("Port", e.get("port")),
