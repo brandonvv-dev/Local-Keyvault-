@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 env:
-  SUPABASE_URL: https://nptmkkjgaewaijunieyf.supabase.co
-  SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wdG1ra2pnYWV3YWlqdW5pZXlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyMDE4MDQsImV4cCI6MjEwODc3NzgwNH0.LOOwa0Ufx4GxoZCoxkKTLbpYfEiUPL1jO9M87AdqyVg
+  SUPABASE_URL: https://ctwgkqubcvqildffwvbu.supabase.co
+  SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0d2drcXViY3ZxaWxkZmZ3dmJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyMTAwNDQsImV4cCI6MjEwODc4NjA0NH0.ZddDoTbcxSx9vcjBOx5Bu9rUwSBTU6gvSlESa3OYJac
 
 jobs:
   ping:
