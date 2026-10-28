@@ -2,3 +2,4 @@ dist/
 build/
 SecureVault-Linux
 __pycache__/
+supabase/.temp/
