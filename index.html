@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KeyVault</title>
+<style>
+  :root { color-scheme: light dark; --bg:#F7F8FA; --card:#FFFFFF; --border:#D8DCE3; --text:#1B1D22; --muted:#5B6270; --accent:#0A66E4; --danger:#D93025; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1C1D22; --card:#24252B; --border:#363841; --text:#F3F4F6; --muted:#A3A7B3; --accent:#3B82F6; --danger:#F25C5C; } }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text); font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif; padding:16px; box-sizing:border-box; }
+  .card { width:100%; max-width:460px; background:var(--card); border:1px solid var(--border); border-radius:14px; padding:32px 28px; box-sizing:border-box; }
+  .brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; font-size:18px; font-weight:600; }
+  .brand span { width:36px; height:36px; border-radius:10px; background:#3B82F6; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+  h1 { margin:0 0 10px; font-size:22px; font-weight:600; }
+  p { margin:0 0 14px; line-height:1.5; color:var(--muted); font-size:15px; }
+  .err h1 { color:var(--danger); }
+  ol { margin:0; padding-left:20px; color:var(--muted); line-height:1.7; }
+  code { font-family:Consolas,Menlo,monospace; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="brand"><span>K</span>KeyVault</div>
+  <div id="ok">
+    <h1>Email confirmed</h1>
+    <p>Your KeyVault account is ready. You can close this tab.</p>
+    <ol>
+      <li>Open KeyVault on your computer.</li>
+      <li>Sign in with your email and password.</li>
+      <li>If this computer has an older vault file, KeyVault offers to import it.</li>
+    </ol>
+  </div>
+  <div id="bad" class="err" hidden>
+    <h1>That link did not work</h1>
+    <p id="why"></p>
+    <p>Open KeyVault, choose Sign up again with the same email, and use the newest email we send you. Links can be used once and expire after an hour.</p>
+  </div>
+</div>
+<script>
+  var h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  var q = new URLSearchParams(location.search);
+  var err = h.get("error_description") || q.get("error_description") || h.get("error") || q.get("error");
+  if (err) {
+    document.getElementById("ok").hidden = true;
+    document.getElementById("bad").hidden = false;
+    document.getElementById("why").textContent = err.replace(/\+/g, " ");
+  }
+</script>
+</body>
+</html>
